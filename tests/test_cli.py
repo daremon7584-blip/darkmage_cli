@@ -417,3 +417,36 @@ def test_payment_list(mock_request):
     assert call_args[0] == "GET"
     assert call_args[1] == "/billing/payments"
 
+
+# ---------------------------------------------------------------------------
+# admin_status
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_admin_status(mock_request):
+    mock_request.return_value = _make_response(200, {
+        "openrouter_balance_usd": "12.50",
+        "openrouter_balance_low_usd": "5.00",
+        "openrouter_balance_low": False,
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.admin_status()
+    assert result["openrouter_balance_usd"] == "12.50"
+    assert result["openrouter_balance_low"] is False
+    call_args, _kwargs = mock_request.call_args
+    assert call_args[0] == "GET"
+    assert call_args[1] == "/admin/status"
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_admin_status_low(mock_request):
+    mock_request.return_value = _make_response(200, {
+        "openrouter_balance_usd": "1.25",
+        "openrouter_balance_low_usd": "5.00",
+        "openrouter_balance_low": True,
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.admin_status()
+    assert result["openrouter_balance_low"] is True
+

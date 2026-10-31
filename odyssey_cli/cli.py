@@ -279,6 +279,35 @@ def cmd_payment_list(args: argparse.Namespace, client: OdysseyClient) -> None:
         print("Платежей нет.")
 
 
+def cmd_admin_status(args: argparse.Namespace, client: OdysseyClient) -> None:
+    data = client.admin_status()
+    balance = data.get("openrouter_balance_usd")
+    low = data.get("openrouter_balance_low")
+    low_threshold = data.get("openrouter_balance_low_usd")
+    print("Статус сервера (админ):")
+    if balance is None:
+        print("  Баланс OpenRouter: недоступен")
+    else:
+        print(f"  Баланс OpenRouter: ${balance} USD")
+        if low:
+            print(f"  ВНИМАНИЕ: баланс ниже порога ${low_threshold} USD")
+        else:
+            print(f"  Порог низкого баланса: ${low_threshold} USD")
+
+
+def cmd_term(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Интерактивный терминал workspace (PTY через runner-manager).
+
+    Требует бэкенд API для проброски PTY — пока заглушка с подсказкой.
+    """
+    print(
+        f"Терминал workspace {args.workspace_id} пока недоступен: "
+        "нужен бэкенд эндпоинт для PTY-проброски через runner-manager "
+        "(Phase 3, сложность High)."
+    )
+    print("Доступно сейчас: odyssey process start|output|stop")
+
+
 def cmd_chat(args: argparse.Namespace, client: OdysseyClient) -> None:
     messages = [{"role": "user", "content": args.message}]
     if args.system:
@@ -523,6 +552,18 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = billing_sub.add_parser("list", help="Список своих платежей")
     p.set_defaults(func=cmd_payment_list)
+
+    # admin
+    admin = sub.add_parser("admin", help="Админские команды (только для владельца)")
+    admin_sub = admin.add_subparsers(dest="admin_command", required=True)
+
+    p = admin_sub.add_parser("status", help="Статус сервера и баланс OpenRouter")
+    p.set_defaults(func=cmd_admin_status)
+
+    # term
+    term = sub.add_parser("term", help="Интерактивный терминал workspace (PTY)")
+    term.add_argument("workspace_id")
+    term.set_defaults(func=cmd_term)
 
     # chat
     p = sub.add_parser("chat", help="Chat completion")

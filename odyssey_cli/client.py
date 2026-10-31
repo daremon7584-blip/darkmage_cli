@@ -408,6 +408,12 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- admin ---
+    def admin_status(self) -> dict:
+        resp = self._request("GET", "/admin/status")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def process_start(
         self, workspace_id: str, argv: list[str], cwd: str | None = None, port: int | None = None
     ) -> dict:
