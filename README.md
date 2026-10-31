@@ -67,10 +67,10 @@ odyssey payment list                                                       # с�
 odyssey admin status                          # баланс OpenRouter (только админ)
 odyssey term <workspace_id>                   # интерактивный терминал (PTY, Phase 3)
 
-odyssey git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, нужен бэкенд)
-odyssey git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, нужен бэкенд)
-odyssey git push <ws> [--branch main]                 # пуш (Phase 3, нужен бэкенд)
-odyssey git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, нужен бэкенд)
+odyssey git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
+odyssey git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, бэкенд)
+odyssey git push <ws> [--branch main]                 # пуш (Phase 3, бэкенд)
+odyssey git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, бэкенд)
 
 odyssey mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
 odyssey mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
