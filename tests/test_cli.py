@@ -541,3 +541,83 @@ def test_mcp_call(mock_request):
     assert kwargs["json"]["tool"] == "files.read"
     assert kwargs["json"]["arguments"] == {"path": "app/main.py"}
 
+
+# ---------------------------------------------------------------------------
+# config
+# ---------------------------------------------------------------------------
+
+
+def test_config_show_json(capsys, monkeypatch, tmp_path):
+    from odyssey_cli.config import save_config
+
+    # Перенаправить конфиг во временную директорию
+    monkeypatch.setattr("odyssey_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    save_config({"base_url": "http://example.com:8000", "token": "secret-token-12345"})
+
+    from odyssey_cli.cli import cmd_config_show
+
+    class Args:
+        json = True
+
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    cmd_config_show(Args(), client)
+    captured = capsys.readouterr()
+    assert "http://example.com:8000" in captured.out
+    assert "secret-token" in captured.out
+
+
+def test_config_show_empty(capsys, monkeypatch, tmp_path):
+    from odyssey_cli.config import save_config
+
+    monkeypatch.setattr("odyssey_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    save_config({})
+
+    from odyssey_cli.cli import cmd_config_show
+
+    class Args:
+        json = False
+
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    cmd_config_show(Args(), client)
+    captured = capsys.readouterr()
+    assert "Конфиг пуст" in captured.out
+
+
+def test_config_set_url_and_token(monkeypatch, tmp_path):
+    from odyssey_cli.config import load_config, save_config
+
+    monkeypatch.setattr("odyssey_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    save_config({})
+
+    from odyssey_cli.cli import cmd_config_set
+
+    class Args:
+        url = "http://new-server:9000"
+        token = "new-token-abcde"
+        verbose = False
+
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    cmd_config_set(Args(), client)
+    cfg = load_config()
+    assert cfg["base_url"] == "http://new-server:9000"
+    assert cfg["token"] == "new-token-abcde"
+
+
+def test_config_set_no_changes(capsys, monkeypatch, tmp_path):
+    from odyssey_cli.config import save_config
+
+    monkeypatch.setattr("odyssey_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    save_config({})
+
+    from odyssey_cli.cli import cmd_config_set
+
+    class Args:
+        url = None
+        token = None
+        verbose = False
+
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    cmd_config_set(Args(), client)
+    captured = capsys.readouterr()
+    assert "Нечего менять" in captured.out
+

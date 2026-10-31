@@ -309,6 +309,41 @@ def cmd_term(args: argparse.Namespace, client: OdysseyClient) -> None:
     print("Доступно сейчас: odyssey process start|output|stop")
 
 
+def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
+    from .config import CONFIG_FILE, load_config
+
+    config = load_config()
+    if args.json:
+        print_json(config)
+        return
+    if not config:
+        print("Конфиг пуст. Файл: " + str(CONFIG_FILE))
+        return
+    print(f"Конфиг ({CONFIG_FILE}):")
+    for key, value in config.items():
+        if key == "token" and value:
+            value = value[:8] + "…" + value[-4:] if len(value) > 12 else "***"
+        print(f"  {key}: {value}")
+
+
+def cmd_config_set(args: argparse.Namespace, client: OdysseyClient) -> None:
+    from .config import load_config, set_base_url, set_token
+
+    changed = False
+    if args.url is not None:
+        set_base_url(args.url)
+        changed = True
+    if args.token is not None:
+        set_token(args.token)
+        changed = True
+    if not changed:
+        print("Нечего менять: укажите --url и/или --token")
+        return
+    print("Конфиг обновлён.")
+    if args.verbose:
+        print_json(load_config())
+
+
 def cmd_git_clone(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.git_clone(args.workspace_id, args.url, args.ref, args.depth))
 
@@ -371,6 +406,18 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url", default=None, help="API base URL (default: ODYSSEY_API_URL or http://localhost:8000)"
+    )
+    parser.add_argument(
+        "--verbose",
+        action="store_true",
+        default=False,
+        help="Показывать стек-трейс при ошибках",
+    )
+    parser.add_argument(
+        "--json",
+        action="store_true",
+        default=False,
+        help="Принудительный JSON-вывод",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -601,6 +648,20 @@ def build_parser() -> argparse.ArgumentParser:
     term.add_argument("workspace_id")
     term.set_defaults(func=cmd_term)
 
+    # config
+    config = sub.add_parser("config", help="Управление конфигом (~/.odyssey-cli/config.json)")
+    config_sub = config.add_subparsers(dest="config_command", required=True)
+
+    p = config_sub.add_parser("show", help="Показать текущий конфиг")
+    p.add_argument("--json", action="store_true", default=False, help="JSON-вывод")
+    p.set_defaults(func=cmd_config_show)
+
+    p = config_sub.add_parser("set", help="Установить параметры конфига")
+    p.add_argument("--url", default=None, help="API base URL")
+    p.add_argument("--token", default=None, help="Bearer токен")
+    p.add_argument("--verbose", action="store_true", default=False, help="Показать обновлённый конфиг")
+    p.set_defaults(func=cmd_config_set)
+
     # git (Phase 3, requires backend GitHub App integration)
     git = sub.add_parser("git", help="Git-операции в workspace (требует бэкенд)")
     git_sub = git.add_subparsers(dest="git_command", required=True)
@@ -677,6 +738,10 @@ def main(argv: list[str] | None = None) -> int:
     try:
         func(args, client)
     except OdysseyError as exc:
+        if getattr(args, "verbose", False):
+            import traceback
+
+            traceback.print_exc()
         print_error(str(exc))
     finally:
         client.close()

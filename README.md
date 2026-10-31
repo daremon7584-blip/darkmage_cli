@@ -75,6 +75,9 @@ odyssey git pr <ws> "заголовок" [--body текст] [--base main] [--he
 odyssey mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
 odyssey mcp call <tool> ключ=значение ...              # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 
+odyssey config show [--json]              # показать конфиг (~/.odyssey-cli/config.json)
+odyssey config set [--url URL] [--token TOKEN] [--verbose]
+
 odyssey chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 0.7] [--max-tokens 1000]
 
 odyssey health

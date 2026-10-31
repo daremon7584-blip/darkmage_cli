@@ -35,7 +35,15 @@
 - `run answer <run_id> <question_id> <answer...>` — ответы на вопросы владельцу (ask_user)
 - `run context <run_id>` — использование контекстных токенов (context_tokens/context_limit)
 
-Все 23 теста проходят, `ruff check` и `mypy` чистые.
+**Phase 2b — улучшение CLI (в коммите `ef0a884` + `6c55985` + текущий):**
+- `admin status` — баланс OpenRouter
+- `term <workspace_id>` — заглушка терминала Phase 3
+- `git clone|commit|push|pr` — Git-операции (stubs)
+- `mcp list|call` — MCP-инструменты (stubs)
+- Глобальные флаги `--verbose`, `--json`
+- Команда `config show|set` для управления `~/.odyssey-cli/config.json`
+
+Все 38 тестов проходят, `ruff check` и `mypy` чистые.
 
 Что нужно сделать перед началом новой фазы:
 - [ ] Добавить тесты (`pytest` + `responses`/`httpx_mock`) для всех команд
