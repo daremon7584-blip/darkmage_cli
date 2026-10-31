@@ -6,6 +6,7 @@ import sys
 from typing import Any
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
+from .config import load_config
 
 
 def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -52,11 +53,34 @@ def cmd_ws_create(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_ws_list(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.workspace_list(args.limit))
+    workspaces = client.workspace_list(args.limit)
+    if args.json or not sys.stdout.isatty():
+        print_json(workspaces)
+        return
+    print(f"{'ID':<38} {'Имя':<30} {'Статус':<15} {'Режим':<10}")
+    print("-" * 85)
+    for w in workspaces:
+        print(
+            f"{w.get('id', ''):<38} "
+            f"{w.get('name', ''):<30} "
+            f"{_color_status(w.get('status', '')):<15} "
+            f"{w.get('approval_mode', ''):<10}"
+        )
+    if not workspaces:
+        print("Нет рабочих зон.")
 
 
 def cmd_ws_get(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.workspace_get(args.workspace_id))
+    data = client.workspace_get(args.workspace_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return
+    print(f"ID:        {data.get('id')}")
+    print(f"Имя:       {data.get('name')}")
+    print(f"Статус:    {_color_status(data.get('status', ''))}")
+    print(f"Режим:     {data.get('approval_mode', '')}")
+    print(f"Создан:    {data.get('created_at', '')}")
+    print(f"Обновлён:  {data.get('updated_at', '')}")
 
 
 def cmd_ws_update(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -66,11 +90,21 @@ def cmd_ws_update(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_ws_start(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.workspace_start(args.workspace_id))
+    data = client.workspace_start(args.workspace_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return
+    print(f"Рабочая зона запущена: {data.get('id')}")
+    print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
 def cmd_ws_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.workspace_stop(args.workspace_id))
+    data = client.workspace_stop(args.workspace_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return
+    print(f"Рабочая зона остановлена: {data.get('id')}")
+    print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
 def cmd_ws_delete(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -145,6 +179,26 @@ def _color(text: str, event_type: str) -> str:
     return f"{_COLORS.get(event_type, '')}{text}{_RESET}"
 
 
+def _color_status(status: str) -> str:
+    """Цветной вывод статуса задачи/воркспейса (только для TTY)."""
+    if not sys.stdout.isatty():
+        return status
+    colors = {
+        "queued": "\033[1;33m",      # bold yellow
+        "running": "\033[1;36m",     # bold cyan
+        "waiting_approval": "\033[1;35m",  # bold magenta
+        "completed": "\033[1;32m",   # bold green
+        "failed": "\033[1;31m",      # bold red
+        "cancelled": "\033[1;31m",   # bold red
+        "creating": "\033[1;34m",    # bold blue
+        "starting": "\033[1;34m",
+        "stopped": "\033[0;37m",     # gray
+        "error": "\033[1;31m",
+        "ready": "\033[1;32m",
+    }
+    return f"{colors.get(status, '')}{status}{_RESET}"
+
+
 def _format_event(ev: dict) -> str:
     eid = ev.get("id", "")
     etype = ev.get("event", "")
@@ -189,7 +243,21 @@ def cmd_run_create(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_run_get(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.run_get(args.run_id))
+    data = client.run_get(args.run_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return
+    print(f"ID:         {data.get('id')}")
+    print(f"Сессия:     {data.get('session_id')}")
+    print(f"Статус:     {_color_status(data.get('status', ''))}")
+    print(f"Модель:     {data.get('model', '')}")
+    print(f"Промпт:     {data.get('prompt', '')[:100]}")
+    print(f"Чекпоинт:   {data.get('checkpoint_status', '')}")
+    print(f"Создан:     {data.get('created_at', '')}")
+    if data.get("started_at"):
+        print(f"Начат:      {data.get('started_at')}")
+    if data.get("finished_at"):
+        print(f"Завершён:   {data.get('finished_at')}")
 
 
 def cmd_run_message(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -218,17 +286,30 @@ def cmd_run_review(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 def cmd_run_list(args: argparse.Namespace, client: OdysseyClient) -> None:
     runs = client.run_list(args.workspace_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(runs)
+        return
+    print(f"{'ID':<38} {'Статус':<15} {'Модель':<20} {'Промпт':<40} {'Создан':<16}")
+    print("-" * 115)
     for r in runs:
         print(
-            f"{r.get('id')}  {r.get('status')}  {r.get('model', '-')}  "
-            f"{r.get('prompt', '')[:60]}  {r.get('created_at', '')[:16]}"
+            f"{r.get('id', ''):<38} "
+            f"{_color_status(r.get('status', '')):<15} "
+            f"{r.get('model', '-'):<20} "
+            f"{r.get('prompt', '')[:40]:<40} "
+            f"{r.get('created_at', '')[:16]}"
         )
     if not runs:
         print("Нет ran.")
 
 
 def cmd_run_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
-    print_json(client.run_stop(args.run_id))
+    data = client.run_stop(args.run_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return
+    print(f"Run остановлен: {data.get('id')}")
+    print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
 def cmd_run_events(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -451,6 +532,38 @@ def cmd_config_set(args: argparse.Namespace, client: OdysseyClient) -> None:
         print_json(load_config())
 
 
+def cmd_config_export(args: argparse.Namespace, client: OdysseyClient) -> None:
+    import json
+
+    from .config import load_config
+
+    config = load_config()
+    if not config:
+        print("Конфиг пуст, нечего экспортировать.")
+        return
+    try:
+        with open(args.output, "w", encoding="utf-8") as f:
+            json.dump(config, f, ensure_ascii=False, indent=2)
+        print(f"Конфиг экспортирован в {args.output}")
+    except OSError as exc:
+        print(f"Ошибка записи файла: {exc}")
+
+
+def cmd_config_import(args: argparse.Namespace, client: OdysseyClient) -> None:
+    import json
+
+    from .config import save_config
+
+    try:
+        with open(args.input, "r", encoding="utf-8") as f:
+            config = json.load(f)
+    except (OSError, json.JSONDecodeError) as exc:
+        print(f"Ошибка чтения файла: {exc}")
+        return
+    save_config(config)
+    print(f"Конфиг импортирован из {args.input}")
+
+
 def cmd_git_clone(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.git_clone(args.workspace_id, args.url, args.ref, args.depth))
 
@@ -506,6 +619,45 @@ def cmd_ready(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.ready())
 
 
+def cmd_doctor(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Проверка окружения и подключения к серверу Odyssey."""
+    print("🩺 Проверка состояния Odyssey CLI\n")
+
+    # 1. Конфигурация
+    config = load_config()
+    api_url = args.url or config.get("base_url", "http://localhost:8000")
+    token = args.token or config.get("token", "")
+
+    print(f"📍 API URL: {api_url}")
+    if token:
+        print(f"🔑 Токен:   {'*' * (len(token) - 4) + token[-4:] if len(token) > 4 else '***'}")
+    else:
+        print("🔑 Токен:   не настроен")
+
+    print()
+
+    # 2. Health check
+    print("🏥 Health check:")
+    try:
+        client.base_url = api_url
+        client.token = token
+        h = client.health()
+        print(f"   ✅ /health:  {h.get('status', 'unknown')}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ❌ /health:  ошибка — {exc}")
+
+    # 3. Ready check
+    print("🚀 Readiness check:")
+    try:
+        r = client.ready()
+        print(f"   ✅ /ready:   {r.get('status', 'unknown')}")
+    except Exception as exc:  # noqa: BLE001
+        print(f"   ❌ /ready:   ошибка — {exc}")
+
+    print()
+    print("Готово к работе." if config.get("base_url") and config.get("token") else "⚠️  Настройте URL и токен через 'odyssey config set'.")
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="odyssey",
@@ -513,6 +665,9 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url", default=None, help="API base URL (default: ODYSSEY_API_URL or http://localhost:8000)"
+    )
+    parser.add_argument(
+        "--token", default=None, help="Bearer токен (default: ODYSSEY_TOKEN или из конфига)"
     )
     parser.add_argument(
         "--verbose",
@@ -524,7 +679,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         default=False,
-        help="Принудительный JSON-вывод",
+        help="Вывод в формате JSON",
     )
     sub = parser.add_subparsers(dest="command", required=True)
 
@@ -779,6 +934,14 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--verbose", action="store_true", default=False, help="Показать обновлённый конфиг")
     p.set_defaults(func=cmd_config_set)
 
+    p = config_sub.add_parser("export", help="Экспорт конфигурации в JSON-файл")
+    p.add_argument("output", help="Путь к выходному файлу")
+    p.set_defaults(func=cmd_config_export)
+
+    p = config_sub.add_parser("import", help="Импорт конфигурации из JSON-файла")
+    p.add_argument("input", help="Путь к входному файлу")
+    p.set_defaults(func=cmd_config_import)
+
     # git (Phase 3, requires backend GitHub App integration)
     git = sub.add_parser("git", help="Git-операции в workspace (требует бэкенд)")
     git_sub = git.add_subparsers(dest="git_command", required=True)
@@ -838,6 +1001,7 @@ def build_parser() -> argparse.ArgumentParser:
     # health
     sub.add_parser("health", help="Liveness").set_defaults(func=cmd_health)
     sub.add_parser("ready", help="Readiness").set_defaults(func=cmd_ready)
+    sub.add_parser("doctor", help="Проверка окружения и подключения").set_defaults(func=cmd_doctor)
 
     return parser
 
