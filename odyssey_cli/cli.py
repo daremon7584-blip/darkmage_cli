@@ -701,6 +701,52 @@ def cmd_history(args: argparse.Namespace, client: OdysseyClient) -> None:
             print(f"  {i + 1:>3}. {entry['command']}")
 
 
+def cmd_parallel(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Выполнить несколько команд параллельно."""
+    import asyncio
+    import shlex
+
+    async def run_one(cmd_str: str) -> tuple[int, str]:
+        """Run a single command string and return (exit_code, output)."""
+        try:
+            parts = shlex.split(cmd_str)
+            old_argv = sys.argv
+            sys.argv = ["odyssey"] + parts
+            try:
+                sub_parser = build_parser()
+                sub_args = sub_parser.parse_args(parts)
+                func = sub_args.func
+                sub_client = OdysseyClient(base_url=sub_args.url)
+                try:
+                    func(sub_args, sub_client)
+                finally:
+                    sub_client.close()
+                return 0, ""
+            except SystemExit as exc:
+                return int(exc.code) if exc.code is not None else 0, ""
+            except Exception as exc:  # noqa: BLE001
+                return 1, str(exc)
+            finally:
+                sys.argv = old_argv
+        except SystemExit as exc:
+            return int(exc.code) if exc.code is not None else 0, ""
+        except Exception as exc:  # noqa: BLE001
+            return 1, str(exc)
+
+    async def run_all() -> None:
+        tasks = [run_one(cmd) for cmd in args.commands]
+        results = await asyncio.gather(*tasks, return_exceptions=True)
+        for i, result in enumerate(results):
+            if isinstance(result, BaseException):
+                print(f"[{i + 1}] Ошибка: {result}")
+            else:
+                code: int = result[0]
+                status = "OK" if code == 0 else f"Ошибка ({code})"
+                print(f"[{i + 1}] {status}: {args.commands[i]}")
+
+    asyncio.run(run_all())
+
+
 def cmd_git_clone(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.git_clone(args.workspace_id, args.url, args.ref, args.depth))
 
@@ -1317,6 +1363,16 @@ def build_parser() -> argparse.ArgumentParser:
         "number", nargs="?", type=int, default=None, help="Номер команды для повтора"
     )
     history.set_defaults(func=cmd_history)
+
+    parallel = sub.add_parser(
+        "parallel", help="Запуск нескольких команд параллельно"
+    )
+    parallel.add_argument(
+        "commands",
+        nargs="+",
+        help="Команды для параллельного выполнения (каждая как отдельная строка)",
+    )
+    parallel.set_defaults(func=cmd_parallel)
 
     return parser
 
