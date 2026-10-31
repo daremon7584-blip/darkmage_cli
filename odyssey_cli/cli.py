@@ -658,6 +658,151 @@ def cmd_doctor(args: argparse.Namespace, client: OdysseyClient) -> None:
     print("Готово к работе." if config.get("base_url") and config.get("token") else "⚠️  Настройте URL и токен через 'odyssey config set'.")
 
 
+def cmd_completion(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Генерация скриптов автодополнения для shell (bash, zsh, fish)."""
+    shell = args.shell if hasattr(args, "shell") and args.shell else "bash"
+
+    if shell == "bash":
+        print(_bash_completion_script())
+    elif shell == "zsh":
+        print(_zsh_completion_script())
+    elif shell == "fish":
+        print(_fish_completion_script())
+    else:
+        print(f"Неизвестная оболочка: {shell}")
+        print("Доступные: bash, zsh, fish")
+
+
+def _bash_completion_script() -> str:
+    return """# Odyssey CLI bash completion
+# Source this file in your ~/.bashrc:
+#   source <(odyssey completion bash)
+
+_odyssey_complete() {
+    local cur prev words cword
+    _init_completion || return
+
+    case "$prev" in
+        odyssey)
+            COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run process payment admin term tui config git mcp chat health ready doctor completion' -- "$cur") )
+            ;;
+        auth)
+            COMPREPLY=( $(compgen -W 'register login logout' -- "$cur") )
+            ;;
+        workspace)
+            COMPREPLY=( $(compgen -W 'create list get update start stop delete' -- "$cur") )
+            ;;
+        files)
+            COMPREPLY=( $(compgen -W 'list read edit search' -- "$cur") )
+            ;;
+        session)
+            COMPREPLY=( $(compgen -W 'create list' -- "$cur") )
+            ;;
+        run)
+            COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events' -- "$cur") )
+            ;;
+        process)
+            COMPREPLY=( $(compgen -W 'start output stop' -- "$cur") )
+            ;;
+        payment)
+            COMPREPLY=( $(compgen -W 'create list' -- "$cur") )
+            ;;
+        git)
+            COMPREPLY=( $(compgen -W 'clone commit push pr' -- "$cur") )
+            ;;
+        mcp)
+            COMPREPLY=( $(compgen -W 'list call' -- "$cur") )
+            ;;
+        config)
+            COMPREPLY=( $(compgen -W 'show set export import' -- "$cur") )
+            ;;
+        *)
+            COMPREPLY=()
+            ;;
+    esac
+}
+complete -F _odyssey_complete odyssey"""
+
+
+def _zsh_completion_script() -> str:
+    return """# Odyssey CLI zsh completion
+# Source this file in your ~/.zshrc:
+#   source <(odyssey completion zsh)
+
+#compdef odyssey
+
+_odyssey_complete() {
+    local -a commands
+    commands=(
+        'auth:Authentication commands'
+        'me:Current user info'
+        'usage:Spend windows'
+        'memory:User memory management'
+        'workspace:Workspace management'
+        'files:Workspace files'
+        'session:Session management'
+        'run:Task runs management'
+        'process:Background processes'
+        'payment:Payments and billing'
+        'admin:Admin commands'
+        'term:Interactive terminal (PTY)'
+        'tui:Full TUI client'
+        'config:Configuration management'
+        'git:Git operations'
+        'mcp:MCP tools'
+        'chat:Chat completion'
+        'health:Liveness check'
+        'ready:Readiness check'
+        'doctor:Environment diagnostics'
+        'completion:Shell completion scripts'
+    )
+    _describe 'command' commands
+}
+
+_odyssey "$@"
+"""
+
+
+def _fish_completion_script() -> str:
+    return """# Odyssey CLI fish completion
+# Save this file to ~/.config/fish/completions/odyssey.fish
+
+complete -c odyssey -f -a 'auth' -d 'Authentication commands'
+complete -c odyssey -f -a 'me' -d 'Current user info'
+complete -c odyssey -f -a 'usage' -d 'Spend windows'
+complete -c odyssey -f -a 'memory' -d 'User memory management'
+complete -c odyssey -f -a 'workspace' -d 'Workspace management'
+complete -c odyssey -f -a 'files' -d 'Workspace files'
+complete -c odyssey -f -a 'session' -d 'Session management'
+complete -c odyssey -f -a 'run' -d 'Task runs management'
+complete -c odyssey -f -a 'process' -d 'Background processes'
+complete -c odyssey -f -a 'payment' -d 'Payments and billing'
+complete -c odyssey -f -a 'admin' -d 'Admin commands'
+complete -c odyssey -f -a 'term' -d 'Interactive terminal (PTY)'
+complete -c odyssey -f -a 'tui' -d 'Full TUI client'
+complete -c odyssey -f -a 'config' -d 'Configuration management'
+complete -c odyssey -f -a 'git' -d 'Git operations'
+complete -c odyssey -f -a 'mcp' -d 'MCP tools'
+complete -c odyssey -f -a 'chat' -d 'Chat completion'
+complete -c odyssey -f -a 'health' -d 'Liveness check'
+complete -c odyssey -f -a 'ready' -d 'Readiness check'
+complete -c odyssey -f -a 'doctor' -d 'Environment diagnostics'
+complete -c odyssey -f -a 'completion' -d 'Shell completion scripts'
+
+# Subcommand completions
+complete -c odyssey -f -a 'register login logout' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
+complete -c odyssey -f -a 'create list get update start stop delete' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
+complete -c odyssey -f -a 'list read edit search' -d 'files subcommands' -n '__fish_seen_subcommand files'
+complete -c odyssey -f -a 'create list' -d 'session subcommands' -n '__fish_seen_subcommand session'
+complete -c odyssey -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c odyssey -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
+complete -c odyssey -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
+complete -c odyssey -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
+complete -c odyssey -f -a 'list call' -d 'mcp subcommands' -n '__fish_seen_subcommand mcp'
+complete -c odyssey -f -a 'show set export import' -d 'config subcommands' -n '__fish_seen_subcommand config'
+"""
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="odyssey",
@@ -1002,6 +1147,15 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Liveness").set_defaults(func=cmd_health)
     sub.add_parser("ready", help="Readiness").set_defaults(func=cmd_ready)
     sub.add_parser("doctor", help="Проверка окружения и подключения").set_defaults(func=cmd_doctor)
+    completion = sub.add_parser("completion", help="Генерация скриптов автодополнения для shell")
+    completion.add_argument(
+        "shell",
+        choices=["bash", "zsh", "fish"],
+        default="bash",
+        nargs="?",
+        help="Тип оболочки (bash, zsh, fish)",
+    )
+    completion.set_defaults(func=cmd_completion)
 
     return parser
 

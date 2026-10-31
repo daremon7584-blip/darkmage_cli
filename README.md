@@ -82,6 +82,7 @@ odyssey config export <файл>              # экспорт конфига в
 odyssey config import <файл>              # импорт конфига из JSON
 
 odyssey doctor                            # проверка окружения и подключения
+odyssey completion <bash|zsh|fish>        # генерация скриптов автодополнения
 
 odyssey tui <workspace_id> [--run-id <id>]  # Полноценный TUI клиент (Textual, Phase 3)
 

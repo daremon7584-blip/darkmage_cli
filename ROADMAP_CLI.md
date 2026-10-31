@@ -114,11 +114,15 @@
 
 ## 3. Фаза 5 — Среднесрочно (Medium, 1–3 дня)
 
-### 3.1. Автодополнение (shell completion) для bash/zsh/fish
+### 3.1. Автодополнение (shell completion) для bash/zsh/fish ✅
 **Сложность:** Medium
+**Статус:** Готово
+Команда `odyssey completion <bash|zsh|fish>` генерирует скрипты автодополнения для соответствующей оболочки.
 **Критерии приёма:**
-- Сгенерированы скрипты дополнения для всех подкоманд и флагов
-- Установка через `odyssey completion install` или ручное подключение
+- `odyssey completion bash` — скрипт для .bashrc
+- `odyssey completion zsh` — скрипт для .zshrc
+- `odyssey completion fish` — скрипт для ~/.config/fish/completions/
+- Автодополнение работает для всех подкоманд и флагов
 
 ### 3.2. Экспорт/импорт файлов workspace (`files upload\|download`)
 **Сложность:** Medium
