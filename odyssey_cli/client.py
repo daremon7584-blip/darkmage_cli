@@ -472,9 +472,14 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
-    def mpc_call(self, tool: str, arguments: dict[str, Any]) -> dict:
+    def mpc_call(
+        self, tool: str, arguments: dict[str, Any], workspace_id: str | None = None
+    ) -> dict:
+        body: dict[str, Any] = {"tool": tool, "arguments": arguments}
+        if workspace_id is not None:
+            body["workspace_id"] = workspace_id
         resp = self._request(
-            "POST", "/mcp/call", json={"tool": tool, "arguments": arguments}
+            "POST", "/mcp/call", json=body
         )
         self._raise_for_status(resp)
         return self._json_or_text(resp)

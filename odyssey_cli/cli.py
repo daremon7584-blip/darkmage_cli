@@ -376,7 +376,7 @@ def cmd_mcp_call(args: argparse.Namespace, client: OdysseyClient) -> None:
                 print_error(f"Неверный формат аргумента: {item} (ожидается ключ=значение)")
             key, value = item.split("=", 1)
             arguments[key] = value
-    print_json(client.mpc_call(args.tool, arguments))
+    print_json(client.mpc_call(args.tool, arguments, args.workspace_id))
 
 
 def cmd_chat(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -701,6 +701,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = mcp_sub.add_parser("call", help="Вызвать MCP-инструмент")
     p.add_argument("tool", help="Имя инструмента")
+    p.add_argument("workspace_id", help="ID рабочего пространства")
     p.add_argument(
         "arguments",
         nargs="*",

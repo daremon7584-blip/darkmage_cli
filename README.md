@@ -73,7 +73,7 @@ odyssey git push <ws> [--branch main]                 # пуш (Phase 3, нуж�
 odyssey git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, нужен бэкенд)
 
 odyssey mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
-odyssey mcp call <tool> ключ=значение ...              # вызов MCP-инструмента (Phase 3, нужен бэкенд)
+odyssey mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 
 odyssey config show [--json]              # показать конфиг (~/.odyssey-cli/config.json)
 odyssey config set [--url URL] [--token TOKEN] [--verbose]

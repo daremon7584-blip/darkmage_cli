@@ -533,13 +533,24 @@ def test_mcp_list(mock_request):
 def test_mcp_call(mock_request):
     mock_request.return_value = _make_response(200, {"result": "ok", "tool": "files.read"})
     client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
-    result = client.mpc_call("files.read", {"path": "app/main.py"})
+    result = client.mpc_call("files.read", {"path": "app/main.py"}, workspace_id="ws-1")
     assert result["result"] == "ok"
     call_args, kwargs = mock_request.call_args
     assert call_args[0] == "POST"
     assert call_args[1] == "/mcp/call"
     assert kwargs["json"]["tool"] == "files.read"
     assert kwargs["json"]["arguments"] == {"path": "app/main.py"}
+    assert kwargs["json"]["workspace_id"] == "ws-1"
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_mcp_call_no_workspace(mock_request):
+    mock_request.return_value = _make_response(200, {"result": "ok", "tool": "files.read"})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.mpc_call("files.read", {"path": "app/main.py"})
+    assert result["result"] == "ok"
+    _call_args, kwargs = mock_request.call_args
+    assert kwargs["json"].get("workspace_id") is None
 
 
 # ---------------------------------------------------------------------------
