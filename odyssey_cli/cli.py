@@ -1,0 +1,422 @@
+from __future__ import annotations
+
+import argparse
+import sys
+
+from .client import OdysseyClient, OdysseyError, print_error, print_json
+
+
+def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
+    data = client.register(args.email, args.password, args.full_name)
+    print_json(data)
+
+
+def cmd_login(args: argparse.Namespace, client: OdysseyClient) -> None:
+    from .config import set_token
+
+    data = client.login(args.email, args.password)
+    token = data.get("access_token")
+    if token:
+        set_token(token)
+        client.token = token
+        print(f"Logged in as {args.email}. Token saved.")
+    else:
+        print_json(data)
+
+
+def cmd_logout(args: argparse.Namespace, client: OdysseyClient) -> None:
+    client.logout()
+    print("Logged out.")
+
+
+def cmd_me(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.me())
+
+
+def cmd_usage(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.usage())
+
+
+def cmd_memory_get(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.memory_get())
+
+
+def cmd_memory_put(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.memory_put(args.content))
+
+
+def cmd_ws_create(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_create(args.name))
+
+
+def cmd_ws_list(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_list(args.limit))
+
+
+def cmd_ws_get(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_get(args.workspace_id))
+
+
+def cmd_ws_update(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(
+        client.workspace_update(args.workspace_id, args.name, args.approval_mode)
+    )
+
+
+def cmd_ws_start(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_start(args.workspace_id))
+
+
+def cmd_ws_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_stop(args.workspace_id))
+
+
+def cmd_ws_delete(args: argparse.Namespace, client: OdysseyClient) -> None:
+    client.workspace_delete(args.workspace_id)
+    print(f"Workspace {args.workspace_id} deleted.")
+
+
+def cmd_ws_files(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_files(args.workspace_id, args.path))
+
+
+def cmd_ws_read(args: argparse.Namespace, client: OdysseyClient) -> None:
+    data = client.workspace_file_content(
+        args.workspace_id, args.path, args.offset, args.limit
+    )
+    print(data.get("content", ""))
+
+
+def cmd_ws_edit(args: argparse.Namespace, client: OdysseyClient) -> None:
+    content = args.content
+    if content == "-":
+        content = sys.stdin.read()
+    print_json(
+        client.workspace_file_edit(
+            args.workspace_id,
+            args.path,
+            content,
+            args.base_content,
+            args.session_id,
+        )
+    )
+
+
+def cmd_ws_search(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.workspace_search(args.workspace_id, args.query, args.path))
+
+
+def cmd_session_create(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.session_create(args.workspace_id, args.title))
+
+
+def cmd_session_list(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.session_list(args.workspace_id, args.limit))
+
+
+def cmd_run_create(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(
+        client.run_create(
+            args.session_id,
+            args.prompt,
+            args.model,
+            args.plan_only,
+            args.thorough,
+            args.image if args.image else None,
+        )
+    )
+
+
+def cmd_run_get(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.run_get(args.run_id))
+
+
+def cmd_run_message(args: argparse.Namespace, client: OdysseyClient) -> None:
+    text = args.text
+    if text == "-":
+        text = sys.stdin.read().strip()
+    print_json(client.run_message(args.run_id, text))
+
+
+def cmd_run_revert(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.run_revert(args.run_id))
+
+
+def cmd_run_review(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.run_review(args.run_id))
+
+
+def cmd_run_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.run_stop(args.run_id))
+
+
+def cmd_run_events(args: argparse.Namespace, client: OdysseyClient) -> None:
+    text = client.run_events(args.run_id, args.last_event_id)
+    print(text, end="")
+
+
+def cmd_process_start(args: argparse.Namespace, client: OdysseyClient) -> None:
+    argv = args.argv
+    print_json(
+        client.process_start(
+            args.workspace_id, argv, args.cwd, args.port
+        )
+    )
+
+
+def cmd_process_output(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(
+        client.process_output(args.workspace_id, args.process_id)
+    )
+
+
+def cmd_process_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.process_stop(args.workspace_id, args.process_id))
+
+
+def cmd_chat(args: argparse.Namespace, client: OdysseyClient) -> None:
+    messages = [{"role": "user", "content": args.message}]
+    if args.system:
+        messages.insert(0, {"role": "system", "content": args.system})
+    data = client.chat_completion(messages, args.model, args.temperature, args.max_tokens)
+    for choice in data.get("choices", []):
+        msg = choice.get("message", {})
+        print(msg.get("content", ""))
+    if data.get("usage"):
+        print_json(data["usage"])
+
+
+def cmd_health(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.health())
+
+
+def cmd_ready(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.ready())
+
+
+def build_parser() -> argparse.ArgumentParser:
+    parser = argparse.ArgumentParser(
+        prog="odyssey",
+        description="CLI for the Odyssey AI platform",
+    )
+    parser.add_argument(
+        "--url", default=None, help="API base URL (default: ODYSSEY_API_URL or http://localhost:8000)"
+    )
+    sub = parser.add_subparsers(dest="command", required=True)
+
+    def add(name: str, help_text: str, func, parent=sub) -> argparse.ArgumentParser:
+        p = parent.add_parser(name, help=help_text)
+        p.set_defaults(func=func)
+        return p
+
+    # --- auth ---
+    auth = sub.add_parser("auth", help="Authentication")
+    auth_sub = auth.add_subparsers(dest="auth_command", required=True)
+
+    p = auth_sub.add_parser("register", help="Create an account")
+    p.add_argument("--email", required=True)
+    p.add_argument("--password", required=True)
+    p.add_argument("--full-name", dest="full_name", default=None)
+    p.set_defaults(func=cmd_register)
+
+    p = auth_sub.add_parser("login", help="Log in and save token")
+    p.add_argument("--email", required=True)
+    p.add_argument("--password", required=True)
+    p.set_defaults(func=cmd_login)
+
+    p = auth_sub.add_parser("logout", help="Remove saved token")
+    p.set_defaults(func=cmd_logout)
+
+    # --- user ---
+    sub.add_parser("me", help="Current user").set_defaults(func=cmd_me)
+    sub.add_parser("usage", help="Spend windows").set_defaults(func=cmd_usage)
+
+    mem = sub.add_parser("memory", help="User memory")
+    mem_sub = mem.add_subparsers(dest="memory_command", required=True)
+    p = mem_sub.add_parser("get", help="Read memory")
+    p.set_defaults(func=cmd_memory_get)
+    p = mem_sub.add_parser("put", help="Write memory")
+    p.add_argument("content")
+    p.set_defaults(func=cmd_memory_put)
+
+    # --- workspaces ---
+    ws = sub.add_parser("workspace", help="Workspaces")
+    ws_sub = ws.add_subparsers(dest="workspace_command", required=True)
+
+    p = ws_sub.add_parser("create", help="Create workspace")
+    p.add_argument("--name", required=True)
+    p.set_defaults(func=cmd_ws_create)
+
+    p = ws_sub.add_parser("list", help="List workspaces")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_ws_list)
+
+    p = ws_sub.add_parser("get", help="Get workspace")
+    p.add_argument("workspace_id")
+    p.set_defaults(func=cmd_ws_get)
+
+    p = ws_sub.add_parser("update", help="Update workspace")
+    p.add_argument("workspace_id")
+    p.add_argument("--name")
+    p.add_argument("--approval-mode", choices=["auto", "ask"])
+    p.set_defaults(func=cmd_ws_update)
+
+    p = ws_sub.add_parser("start", help="Start workspace")
+    p.add_argument("workspace_id")
+    p.set_defaults(func=cmd_ws_start)
+
+    p = ws_sub.add_parser("stop", help="Stop workspace")
+    p.add_argument("workspace_id")
+    p.set_defaults(func=cmd_ws_stop)
+
+    p = ws_sub.add_parser("delete", help="Delete workspace")
+    p.add_argument("workspace_id")
+    p.set_defaults(func=cmd_ws_delete)
+
+    # files
+    files = sub.add_parser("files", help="Workspace files")
+    files_sub = files.add_subparsers(dest="files_command", required=True)
+
+    p = files_sub.add_parser("list", help="List directory")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".")
+    p.set_defaults(func=cmd_ws_files)
+
+    p = files_sub.add_parser("read", help="Read file content")
+    p.add_argument("workspace_id")
+    p.add_argument("path")
+    p.add_argument("--offset", type=int, default=1)
+    p.add_argument("--limit", type=int, default=2000)
+    p.set_defaults(func=cmd_ws_read)
+
+    p = files_sub.add_parser("edit", help="Request a file edit (editor flow, waits for approval)")
+    p.add_argument("workspace_id")
+    p.add_argument("path")
+    p.add_argument("content", help="New file content, or '-' to read from stdin")
+    p.add_argument("--base-content", help="Current file content (fetched automatically if omitted)")
+    p.add_argument("--session-id", help="Session to attach the edit run to")
+    p.set_defaults(func=cmd_ws_edit)
+
+    p = files_sub.add_parser("search", help="Search files")
+    p.add_argument("workspace_id")
+    p.add_argument("query")
+    p.add_argument("path", nargs="?", default=".")
+    p.set_defaults(func=cmd_ws_search)
+
+    # sessions
+    sess = sub.add_parser("session", help="Sessions")
+    sess_sub = sess.add_subparsers(dest="session_command", required=True)
+
+    p = sess_sub.add_parser("create", help="Create session")
+    p.add_argument("workspace_id")
+    p.add_argument("--title", default=None)
+    p.set_defaults(func=cmd_session_create)
+
+    p = sess_sub.add_parser("list", help="List sessions")
+    p.add_argument("workspace_id")
+    p.add_argument("--limit", type=int, default=50)
+    p.set_defaults(func=cmd_session_list)
+
+    # runs
+    runs = sub.add_parser("run", help="Runs")
+    runs_sub = runs.add_subparsers(dest="run_command", required=True)
+
+    p = runs_sub.add_parser("create", help="Create a run")
+    p.add_argument("session_id")
+    p.add_argument("--prompt", required=True)
+    p.add_argument("--model")
+    p.add_argument("--plan-only", action="store_true", dest="plan_only")
+    p.add_argument("--thorough", action="store_true", dest="thorough")
+    p.add_argument(
+        "--image",
+        action="append",
+        default=[],
+        help="Image file to attach (PNG/JPEG/WEBP, max 1.5 MB, up to 3)",
+    )
+    p.set_defaults(func=cmd_run_create)
+
+    p = runs_sub.add_parser("get", help="Get run")
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_get)
+
+    p = runs_sub.add_parser("message", help="Send a message to a running task")
+    p.add_argument("run_id")
+    p.add_argument("text", help="Message text, or '-' to read from stdin")
+    p.set_defaults(func=cmd_run_message)
+
+    p = runs_sub.add_parser("revert", help="Revert a finished task")
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_revert)
+
+    p = runs_sub.add_parser("review", help="Review a finished task's diff")
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_review)
+
+    p = runs_sub.add_parser("stop", help="Stop a run")
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_stop)
+
+    p = runs_sub.add_parser("events", help="Stream run events (SSE)")
+    p.add_argument("run_id")
+    p.add_argument("--last-event-id", default=None, dest="last_event_id")
+    p.set_defaults(func=cmd_run_events)
+
+    # processes
+    proc = sub.add_parser("process", help="Background processes (workspace sandbox)")
+    proc_sub = proc.add_subparsers(dest="process_command", required=True)
+
+    p = proc_sub.add_parser("start", help="Start a background process")
+    p.add_argument("workspace_id")
+    p.add_argument("argv", nargs="+", help="Command and arguments (argv, no shell)")
+    p.add_argument("--cwd", help="Working directory inside the workspace")
+    p.add_argument("--port", type=int, help="Port the process listens on")
+    p.set_defaults(func=cmd_process_start)
+
+    p = proc_sub.add_parser("output", help="Get process output")
+    p.add_argument("workspace_id")
+    p.add_argument("process_id", nargs="?", default=None, help="Process ID (omits to list all)")
+    p.set_defaults(func=cmd_process_output)
+
+    p = proc_sub.add_parser("stop", help="Stop a background process")
+    p.add_argument("workspace_id")
+    p.add_argument("process_id")
+    p.set_defaults(func=cmd_process_stop)
+
+    # chat
+    p = sub.add_parser("chat", help="Chat completion")
+    p.add_argument("message")
+    p.add_argument("--system")
+    p.add_argument("--model")
+    p.add_argument("--temperature", type=float, default=0.7)
+    p.add_argument("--max-tokens", type=int, default=None, dest="max_tokens")
+    p.set_defaults(func=cmd_chat)
+
+    # health
+    sub.add_parser("health", help="Liveness").set_defaults(func=cmd_health)
+    sub.add_parser("ready", help="Readiness").set_defaults(func=cmd_ready)
+
+    return parser
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = build_parser()
+    args = parser.parse_args(argv)
+
+    client = OdysseyClient(base_url=args.url)
+    try:
+        func = args.func
+    except AttributeError:
+        parser.print_help()
+        return 1
+
+    try:
+        func(args, client)
+    except OdysseyError as exc:
+        print_error(str(exc))
+    finally:
+        client.close()
+    return 0
+
+
+if __name__ == "__main__":
+    sys.exit(main())
