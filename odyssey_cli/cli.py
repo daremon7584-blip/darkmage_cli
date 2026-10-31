@@ -3,6 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from typing import Any
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
 
@@ -308,6 +309,41 @@ def cmd_term(args: argparse.Namespace, client: OdysseyClient) -> None:
     print("Доступно сейчас: odyssey process start|output|stop")
 
 
+def cmd_git_clone(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.git_clone(args.workspace_id, args.url, args.ref, args.depth))
+
+
+def cmd_git_commit(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.git_commit(args.workspace_id, args.message, args.branch))
+
+
+def cmd_git_push(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.git_push(args.workspace_id, args.branch))
+
+
+def cmd_git_pr_create(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(
+        client.git_pr_create(
+            args.workspace_id, args.title, args.body, args.base, args.head
+        )
+    )
+
+
+def cmd_mcp_list(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.mcp_list())
+
+
+def cmd_mcp_call(args: argparse.Namespace, client: OdysseyClient) -> None:
+    arguments: dict[str, Any] = {}
+    if args.arguments:
+        for item in args.arguments:
+            if "=" not in item:
+                print_error(f"Неверный формат аргумента: {item} (ожидается ключ=значение)")
+            key, value = item.split("=", 1)
+            arguments[key] = value
+    print_json(client.mpc_call(args.tool, arguments))
+
+
 def cmd_chat(args: argparse.Namespace, client: OdysseyClient) -> None:
     messages = [{"role": "user", "content": args.message}]
     if args.system:
@@ -564,6 +600,52 @@ def build_parser() -> argparse.ArgumentParser:
     term = sub.add_parser("term", help="Интерактивный терминал workspace (PTY)")
     term.add_argument("workspace_id")
     term.set_defaults(func=cmd_term)
+
+    # git (Phase 3, requires backend GitHub App integration)
+    git = sub.add_parser("git", help="Git-операции в workspace (требует бэкенд)")
+    git_sub = git.add_subparsers(dest="git_command", required=True)
+
+    p = git_sub.add_parser("clone", help="Клонировать репозиторий в workspace")
+    p.add_argument("workspace_id")
+    p.add_argument("url")
+    p.add_argument("--ref", default=None, help="Ветка или тег")
+    p.add_argument("--depth", type=int, default=1, help="Глубина клонирования")
+    p.set_defaults(func=cmd_git_clone)
+
+    p = git_sub.add_parser("commit", help="Зафиксировать изменения")
+    p.add_argument("workspace_id")
+    p.add_argument("message")
+    p.add_argument("--branch", default=None, help="Ветка для коммита")
+    p.set_defaults(func=cmd_git_commit)
+
+    p = git_sub.add_parser("push", help="Отправить изменения в удалённый репозиторий")
+    p.add_argument("workspace_id")
+    p.add_argument("--branch", default=None, help="Ветка для пуша")
+    p.set_defaults(func=cmd_git_push)
+
+    p = git_sub.add_parser("pr", help="Создать pull request")
+    p.add_argument("workspace_id")
+    p.add_argument("title")
+    p.add_argument("--body", default=None, help="Описание PR")
+    p.add_argument("--base", default="main", help="Базовая ветка")
+    p.add_argument("--head", default=None, help="Ветка-источник")
+    p.set_defaults(func=cmd_git_pr_create)
+
+    # mcp (Phase 3, requires backend MCP server)
+    mcp = sub.add_parser("mcp", help="MCP инструменты (требует бэкенд MCP-сервер)")
+    mcp_sub = mcp.add_subparsers(dest="mcp_command", required=True)
+
+    p = mcp_sub.add_parser("list", help="Список доступных MCP-инструментов")
+    p.set_defaults(func=cmd_mcp_list)
+
+    p = mcp_sub.add_parser("call", help="Вызвать MCP-инструмент")
+    p.add_argument("tool", help="Имя инструмента")
+    p.add_argument(
+        "arguments",
+        nargs="*",
+        help="Аргументы в формате ключ=значение",
+    )
+    p.set_defaults(func=cmd_mcp_call)
 
     # chat
     p = sub.add_parser("chat", help="Chat completion")

@@ -414,6 +414,71 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- git (Phase 3, requires backend GitHub App integration) ---
+    def git_clone(self, workspace_id: str, url: str, ref: str | None = None, depth: int = 1) -> dict:
+        body: dict[str, Any] = {"url": url, "depth": depth}
+        if ref is not None:
+            body["ref"] = ref
+        resp = self._request(
+            "POST", f"/workspaces/{workspace_id}/git/clone", json=body
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def git_commit(
+        self, workspace_id: str, message: str, branch: str | None = None
+    ) -> dict:
+        body: dict[str, Any] = {"message": message}
+        if branch is not None:
+            body["branch"] = branch
+        resp = self._request(
+            "POST", f"/workspaces/{workspace_id}/git/commit", json=body
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def git_push(self, workspace_id: str, branch: str | None = None) -> dict:
+        body: dict[str, Any] = {}
+        if branch is not None:
+            body["branch"] = branch
+        resp = self._request(
+            "POST", f"/workspaces/{workspace_id}/git/push", json=body
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def git_pr_create(
+        self,
+        workspace_id: str,
+        title: str,
+        body: str | None = None,
+        base: str = "main",
+        head: str | None = None,
+    ) -> dict:
+        payload: dict[str, Any] = {"title": title, "base": base}
+        if body is not None:
+            payload["body"] = body
+        if head is not None:
+            payload["head"] = head
+        resp = self._request(
+            "POST", f"/workspaces/{workspace_id}/git/pr", json=payload
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    # --- mcp (Phase 3, requires backend MCP server) ---
+    def mcp_list(self) -> dict:
+        resp = self._request("GET", "/mcp/tools")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def mpc_call(self, tool: str, arguments: dict[str, Any]) -> dict:
+        resp = self._request(
+            "POST", "/mcp/call", json={"tool": tool, "arguments": arguments}
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def process_start(
         self, workspace_id: str, argv: list[str], cwd: str | None = None, port: int | None = None
     ) -> dict:

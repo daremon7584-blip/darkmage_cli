@@ -450,3 +450,94 @@ def test_admin_status_low(mock_request):
     result = client.admin_status()
     assert result["openrouter_balance_low"] is True
 
+
+# ---------------------------------------------------------------------------
+# git
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_git_clone(mock_request):
+    mock_request.return_value = _make_response(200, {
+        "commit": "abc123",
+        "url": "https://github.com/owner/repo.git",
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.git_clone("ws-1", "https://github.com/owner/repo.git", ref="main", depth=1)
+    assert result["commit"] == "abc123"
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/workspaces/ws-1/git/clone"
+    assert kwargs["json"]["url"] == "https://github.com/owner/repo.git"
+    assert kwargs["json"]["ref"] == "main"
+    assert kwargs["json"]["depth"] == 1
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_git_commit(mock_request):
+    mock_request.return_value = _make_response(200, {"commit": "def456", "branch": "main"})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.git_commit("ws-1", "Add feature", branch="feature")
+    assert result["commit"] == "def456"
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/workspaces/ws-1/git/commit"
+    assert kwargs["json"]["message"] == "Add feature"
+    assert kwargs["json"]["branch"] == "feature"
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_git_push(mock_request):
+    mock_request.return_value = _make_response(200, {"pushed": True, "branch": "main"})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.git_push("ws-1", branch="main")
+    assert result["pushed"] is True
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/workspaces/ws-1/git/push"
+    assert kwargs["json"]["branch"] == "main"
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_git_pr_create(mock_request):
+    mock_request.return_value = _make_response(200, {"pr_number": 42, "url": "https://github.com/owner/repo/pull/42"})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.git_pr_create("ws-1", "Add feature", body="Description", base="main", head="feature")
+    assert result["pr_number"] == 42
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/workspaces/ws-1/git/pr"
+    assert kwargs["json"]["title"] == "Add feature"
+    assert kwargs["json"]["body"] == "Description"
+    assert kwargs["json"]["base"] == "main"
+    assert kwargs["json"]["head"] == "feature"
+
+
+# ---------------------------------------------------------------------------
+# mcp
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_mcp_list(mock_request):
+    mock_request.return_value = _make_response(200, {"tools": ["files.read", "files.write", "run.create"]})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.mcp_list()
+    assert "files.read" in result["tools"]
+    call_args, _kwargs = mock_request.call_args
+    assert call_args[0] == "GET"
+    assert call_args[1] == "/mcp/tools"
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_mcp_call(mock_request):
+    mock_request.return_value = _make_response(200, {"result": "ok", "tool": "files.read"})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.mpc_call("files.read", {"path": "app/main.py"})
+    assert result["result"] == "ok"
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/mcp/call"
+    assert kwargs["json"]["tool"] == "files.read"
+    assert kwargs["json"]["arguments"] == {"path": "app/main.py"}
+
