@@ -404,6 +404,18 @@ def cmd_term(args: argparse.Namespace, client: OdysseyClient) -> None:
             pass
 
 
+def cmd_tui(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Запустить полноценный TUI клиент (Textual)."""
+    from .tui import run_tui
+
+    run_tui(
+        base_url=client.base_url,
+        token=client.token,
+        workspace_id=args.workspace_id,
+        run_id=args.run_id,
+    )
+
+
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
     from .config import CONFIG_FILE, load_config
 
@@ -746,6 +758,12 @@ def build_parser() -> argparse.ArgumentParser:
     term = sub.add_parser("term", help="Интерактивный терминал workspace (PTY)")
     term.add_argument("workspace_id")
     term.set_defaults(func=cmd_term)
+
+    # tui
+    tui = sub.add_parser("tui", help="Полноценный TUI клиент (Textual)")
+    tui.add_argument("workspace_id")
+    tui.add_argument("--run-id", default=None, dest="run_id", help="ID run для отслеживания")
+    tui.set_defaults(func=cmd_tui)
 
     # config
     config = sub.add_parser("config", help="Управление конфигом (~/.odyssey-cli/config.json)")

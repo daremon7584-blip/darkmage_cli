@@ -79,6 +79,8 @@ odyssey mcp call <tool> <workspace_id> ключ=значение ...  # вызо
 odyssey config show [--json]              # показать конфиг (~/.odyssey-cli/config.json)
 odyssey config set [--url URL] [--token TOKEN] [--verbose]
 
+odyssey tui <workspace_id> [--run-id <id>]  # Полноценный TUI клиент (Textual, Phase 3)
+
 odyssey chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 0.7] [--max-tokens 1000]
 
 odyssey health
