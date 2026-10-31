@@ -142,6 +142,34 @@ def cmd_ws_search(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.workspace_search(args.workspace_id, args.query, args.path))
 
 
+def cmd_ws_download(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Download file from workspace to local filesystem."""
+    result = client.workspace_file_download(
+        args.workspace_id, args.remote_path, args.local_path
+    )
+    if args.json:
+        print_json(result)
+        return
+    print(
+        f"Downloaded: {result['remote_path']} → {result['local_path']} "
+        f"({result.get('size_bytes', 0)} bytes)"
+    )
+
+
+def cmd_ws_upload(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Upload local file to workspace."""
+    result = client.workspace_file_upload(
+        args.local_path, args.workspace_id, args.remote_path
+    )
+    if args.json:
+        print_json(result)
+        return
+    print(
+        f"Uploaded: {args.local_path} → {result.get('remote_path', args.remote_path)} "
+        f"({result.get('size_bytes', 0)} bytes)"
+    )
+
+
 def cmd_session_create(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.session_create(args.workspace_id, args.title))
 
@@ -926,6 +954,18 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("query")
     p.add_argument("path", nargs="?", default=".")
     p.set_defaults(func=cmd_ws_search)
+
+    p = files_sub.add_parser("download", help="Download file from workspace to local")
+    p.add_argument("workspace_id")
+    p.add_argument("remote_path")
+    p.add_argument("local_path")
+    p.set_defaults(func=cmd_ws_download)
+
+    p = files_sub.add_parser("upload", help="Upload local file to workspace")
+    p.add_argument("local_path")
+    p.add_argument("workspace_id")
+    p.add_argument("remote_path")
+    p.set_defaults(func=cmd_ws_upload)
 
     # sessions
     sess = sub.add_parser("session", help="Sessions")

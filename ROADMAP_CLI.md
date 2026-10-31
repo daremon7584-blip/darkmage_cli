@@ -124,12 +124,13 @@
 - `odyssey completion fish` — скрипт для ~/.config/fish/completions/
 - Автодополнение работает для всех подкоманд и флагов
 
-### 3.2. Экспорт/импорт файлов workspace (`files upload\|download`)
+### 3.2. Экспорт/импорт файлов workspace (`files upload\|download`) ✅
 **Сложность:** Medium
+**Статус:** Готово
 **Критерии приёма:**
-- `files download <ws> <remote_path> <local_path>` — скачивание файла по API
-- `files upload <local_path> <ws> <remote_path>` — чтение локального файла и отправка через API
-- Ограничение размера тела запроса учтено
+- `files download` — скачивание файла из workspace в локальную файловую систему через `GET /workspaces/{id}/files/content`
+- `files upload` — чтение локального файла и отправка в workspace через `POST /workspaces/{id}/file-edits` с `base_content=""`
+- Ограничение размера тела запроса учтено (max 256 KiB контента)
 
 ### 3.3. Дерево файлов (`files tree`)
 **Сложность:** Medium

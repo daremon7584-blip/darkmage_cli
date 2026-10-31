@@ -196,6 +196,37 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def workspace_file_download(self, workspace_id: str, remote_path: str, local_path: str) -> dict:
+        """Download a file from workspace to local filesystem."""
+        data = self.workspace_file_content(workspace_id, remote_path)
+        content = data.get("content", "")
+        try:
+            with open(local_path, "w", encoding="utf-8") as f:
+                f.write(content)
+        except OSError as exc:
+            raise OdysseyError(f"Cannot write to {local_path}: {exc}")
+        return {
+            "workspace_id": workspace_id,
+            "remote_path": remote_path,
+            "local_path": local_path,
+            "size_bytes": data.get("size_bytes", 0),
+        }
+
+    def workspace_file_upload(self, local_path: str, workspace_id: str, remote_path: str) -> dict:
+        """Upload a local file to workspace."""
+        try:
+            with open(local_path, "r", encoding="utf-8") as f:
+                content = f.read()
+        except OSError as exc:
+            raise OdysseyError(f"Cannot read {local_path}: {exc}")
+        # For new file creation, base_content is empty
+        return self.workspace_file_edit(
+            workspace_id=workspace_id,
+            path=remote_path,
+            content=content,
+            base_content="",
+        )
+
     def workspace_search(
         self, workspace_id: str, query: str, path: str = "."
     ) -> dict:

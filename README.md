@@ -42,6 +42,8 @@ odyssey workspace update <id> --name new --approval-mode ask
 odyssey files list <id> [path]
 odyssey files read <id> <path> [--offset 1] [--limit 2000]
 odyssey files edit <id> <path> "new content" [--base-content "old"] [--session-id <sid>]
+odyssey files download <id> <remote_path> <local_path>
+odyssey files upload <local_path> <id> <remote_path>
 odyssey files search <id> <query> [path]
 
 odyssey session create <workspace_id> [--title "Task"]
