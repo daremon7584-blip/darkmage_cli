@@ -1334,6 +1334,22 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         func(args, client)
+        # Record command in history
+        import json
+
+        from .config import CONFIG_DIR
+
+        history_file = CONFIG_DIR / "history.json"
+        try:
+            with open(history_file, "r", encoding="utf-8") as f:
+                history = json.load(f)
+        except (OSError, json.JSONDecodeError):
+            history = []
+        history.append({"command": " ".join(sys.argv[1:]), "timestamp": str(__import__("datetime").datetime.now())})
+        # Keep only last 100 entries
+        history = history[-100:]
+        with open(history_file, "w", encoding="utf-8") as f:
+            json.dump(history, f, ensure_ascii=False, indent=2)
     except OdysseyError as exc:
         if getattr(args, "verbose", False):
             import traceback
