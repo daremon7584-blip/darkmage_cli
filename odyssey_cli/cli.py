@@ -3,7 +3,7 @@ from __future__ import annotations
 import argparse
 import json
 import sys
-from typing import Any
+from typing import Any, cast
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
 from .config import load_config
@@ -192,17 +192,18 @@ def _tree_to_dict(
         data = client.workspace_files(workspace_id, path)
     except OdysseyError:
         return {"path": path, "error": "Cannot list directory"}
-    entries = data.get("entries", [])
-    result = {"path": path, "entries": []}
+    entries = cast(list, data.get("entries", []))
+    entries_list: list = []
+    result = {"path": path, "entries": entries_list}
     if depth < max_depth:
         for entry in entries:
             entry_path = f"{path}/{entry['name']}" if path != "." else entry["name"]
             if entry["kind"] == "directory":
-                result["entries"].append(
+                entries_list.append(
                     _tree_to_dict(client, workspace_id, entry_path, depth + 1, max_depth)
                 )
             else:
-                result["entries"].append(
+                entries_list.append(
                     {
                         "name": entry["name"],
                         "kind": entry["kind"],
@@ -664,6 +665,40 @@ def cmd_config_import(args: argparse.Namespace, client: OdysseyClient) -> None:
         return
     save_config(config)
     print(f"Конфиг импортирован из {args.input}")
+
+
+def cmd_history(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Показать или повторить предыдущие команды CLI."""
+    import json
+
+    from .config import CONFIG_DIR
+
+    history_file = CONFIG_DIR / "history.json"
+    try:
+        with open(history_file, "r", encoding="utf-8") as f:
+            history = json.load(f)
+    except (OSError, json.JSONDecodeError):
+        history = []
+
+    if args.number is not None:
+        idx = args.number - 1
+        if idx < 0 or idx >= len(history):
+            print(f"Команда #{args.number} не найдена в истории")
+            return
+        cmd = history[idx]["command"]
+        print(f"Повтор #{args.number}: {cmd}")
+        import shlex
+
+        sys.exit(main(shlex.split(cmd)))
+    else:
+        if not history:
+            print("История команд пуста")
+            return
+        print("Последние команды:")
+        start = max(0, len(history) - 10)
+        for i in range(start, len(history)):
+            entry = history[i]
+            print(f"  {i + 1:>3}. {entry['command']}")
 
 
 def cmd_git_clone(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -1276,6 +1311,12 @@ def build_parser() -> argparse.ArgumentParser:
         help="Тип оболочки (bash, zsh, fish)",
     )
     completion.set_defaults(func=cmd_completion)
+
+    history = sub.add_parser("history", help="История команд CLI")
+    history.add_argument(
+        "number", nargs="?", type=int, default=None, help="Номер команды для повтора"
+    )
+    history.set_defaults(func=cmd_history)
 
     return parser
 
