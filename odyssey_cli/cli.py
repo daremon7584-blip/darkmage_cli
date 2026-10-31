@@ -170,6 +170,80 @@ def cmd_ws_upload(args: argparse.Namespace, client: OdysseyClient) -> None:
     )
 
 
+def cmd_ws_tree(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Show directory tree for workspace."""
+    if args.json:
+        result = _tree_to_dict(client, args.workspace_id, args.path, 0, args.depth)
+        print_json(result)
+        return
+    print(f"{args.workspace_id}/{args.path}")
+    _print_tree(client, args.workspace_id, args.path, "", 0, args.depth)
+
+
+def _tree_to_dict(
+    client: OdysseyClient,
+    workspace_id: str,
+    path: str,
+    depth: int,
+    max_depth: int,
+) -> dict:
+    """Build a nested dict representation of the workspace tree."""
+    try:
+        data = client.workspace_files(workspace_id, path)
+    except OdysseyError:
+        return {"path": path, "error": "Cannot list directory"}
+    entries = data.get("entries", [])
+    result = {"path": path, "entries": []}
+    if depth < max_depth:
+        for entry in entries:
+            entry_path = f"{path}/{entry['name']}" if path != "." else entry["name"]
+            if entry["kind"] == "directory":
+                result["entries"].append(
+                    _tree_to_dict(client, workspace_id, entry_path, depth + 1, max_depth)
+                )
+            else:
+                result["entries"].append(
+                    {
+                        "name": entry["name"],
+                        "kind": entry["kind"],
+                        "size_bytes": entry.get("size_bytes"),
+                    }
+                )
+    return result
+
+
+def _print_tree(
+    client: OdysseyClient,
+    workspace_id: str,
+    path: str,
+    prefix: str,
+    depth: int,
+    max_depth: int,
+) -> None:
+    """Recursively print directory tree."""
+    try:
+        data = client.workspace_files(workspace_id, path)
+    except OdysseyError as exc:
+        print(f"{prefix}❌ {path} (error: {exc})")
+        return
+    entries = data.get("entries", [])
+    # Sort directories first, then files
+    entries.sort(key=lambda e: (e["kind"] != "directory", e["name"]))
+    for i, entry in enumerate(entries):
+        entry_path = f"{path}/{entry['name']}" if path != "." else entry["name"]
+        is_last = i == len(entries) - 1
+        connector = "└── " if is_last else "├── "
+        if entry["kind"] == "directory":
+            print(f"{prefix}{connector}📁 {entry['name']}/")
+            if depth < max_depth:
+                extension = "    " if is_last else "│   "
+                _print_tree(client, workspace_id, entry_path, prefix + extension, depth + 1, max_depth)
+        else:
+            size = entry.get("size_bytes", 0)
+            size_str = f" ({size} B)" if size else ""
+            print(f"{prefix}{connector}📄 {entry['name']}{size_str}")
+
+
 def cmd_session_create(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.session_create(args.workspace_id, args.title))
 
@@ -966,6 +1040,12 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("workspace_id")
     p.add_argument("remote_path")
     p.set_defaults(func=cmd_ws_upload)
+
+    p = files_sub.add_parser("tree", help="Show directory tree")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Directory path (default: .)")
+    p.add_argument("--depth", type=int, default=10, help="Max depth (default: 10)")
+    p.set_defaults(func=cmd_ws_tree)
 
     # sessions
     sess = sub.add_parser("session", help="Sessions")
