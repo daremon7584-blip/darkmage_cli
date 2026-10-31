@@ -7,7 +7,7 @@ import sys
 from typing import Any, cast
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
-from .config import CONFIG_DIR, CONFIG_FILE, load_config, save_config
+from .config import get_token, load_config, save_config
 
 
 def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -735,6 +735,7 @@ def cmd_tui(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
     from .config import load_config
+    from .security import CONFIG_FILE
 
     config = load_config()
     if args.json:
@@ -751,17 +752,14 @@ def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_config_set(args: argparse.Namespace, client: OdysseyClient) -> None:
-    from .config import load_config, set_base_url, set_token
+    from .config import load_config, set_base_url
 
     changed = False
     if args.url is not None:
         set_base_url(args.url)
         changed = True
-    if args.token is not None:
-        set_token(args.token)
-        changed = True
     if not changed:
-        print("Нечего менять: укажите --url и/или --token")
+        print("Нечего менять: укажите --url")
         return
     print("Конфиг обновлён.")
     if args.verbose:
@@ -803,6 +801,7 @@ def cmd_history(args: argparse.Namespace, client: OdysseyClient) -> None:
     """Показать или повторить предыдущие команды CLI."""
     import json
 
+    from .security import CONFIG_DIR
 
     history_file = CONFIG_DIR / "history.json"
     try:
@@ -940,7 +939,7 @@ def cmd_doctor(args: argparse.Namespace, client: OdysseyClient) -> None:
     # 1. Конфигурация
     config = load_config()
     api_url = args.url or config.get("base_url", "http://localhost:8000")
-    token = args.token or config.get("token", "")
+    token = get_token()
 
     print(f"📍 API URL: {api_url}")
     if token:
@@ -1124,9 +1123,6 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parser.add_argument(
         "--url", default=None, help="API base URL (default: ODYSSEY_API_URL or http://localhost:8000)"
-    )
-    parser.add_argument(
-        "--token", default=None, help="Bearer токен (default: ODYSSEY_TOKEN или из конфига)"
     )
     parser.add_argument(
         "--verbose",
@@ -1410,8 +1406,9 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = config_sub.add_parser("set", help="Установить параметры конфига")
     p.add_argument("--url", default=None, help="API base URL")
-    p.add_argument("--token", default=None, help="Bearer токен")
-    p.add_argument("--verbose", action="store_true", default=False, help="Показать обновлённый конфиг")
+    p.add_argument(
+        "--verbose", action="store_true", default=False, help="Показать обновлённый конфиг"
+    )
     p.set_defaults(func=cmd_config_set)
 
     p = config_sub.add_parser("export", help="Экспорт конфигурации в JSON-файл")
@@ -1529,7 +1526,7 @@ def main(argv: list[str] | None = None) -> int:
         # Record command in history
         import json
 
-        from .config import CONFIG_DIR
+        from .security import CONFIG_DIR
 
         history_file = CONFIG_DIR / "history.json"
         try:

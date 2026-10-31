@@ -604,14 +604,14 @@ def test_config_set_url_and_token(monkeypatch, tmp_path):
 
     class Args:
         url = "http://new-server:9000"
-        token = "new-token-abcde"
         verbose = False
 
     client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
     cmd_config_set(Args(), client)
     cfg = load_config()
     assert cfg["base_url"] == "http://new-server:9000"
-    assert cfg["token"] == "new-token-abcde"
+    # Token should not be set via CLI argument (security: use ODYSSEY_TOKEN env var instead)
+    assert "token" not in cfg
 
 
 def test_config_set_no_changes(capsys, monkeypatch, tmp_path):

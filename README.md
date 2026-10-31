@@ -13,10 +13,12 @@ pip install -e .
 
 ```bash
 export ODYSSEY_API_URL=http://your-server:8000   # default: http://localhost:8000
-export ODYSSEY_TOKEN=...                         # or log in via the CLI
+export ODYSSEY_TOKEN=...                         # bearer token for authentication
 ```
 
-Token is saved to `~/.odyssey-cli/config.json` after `odyssey auth login` or `odyssey auth interactive`.
+Token is encrypted and saved to `~/.odyssey-cli/config.json` after `odyssey auth login` or `odyssey auth interactive`. The token is encrypted at rest using Fernet (AES-128).
+
+**Never pass the token via command line arguments** — it would be visible in process listings. Use `ODYSSEY_TOKEN` environment variable instead.
 
 ## Quick Start
 
@@ -96,7 +98,7 @@ odyssey mcp list                                       # список MCP-инс
 odyssey mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 
 odyssey config show [--json]              # показать конфиг (~/.odyssey-cli/config.json)
-odyssey config set [--url URL] [--token TOKEN] [--verbose]
+odyssey config set [--url URL] [--verbose]
 odyssey config export <файл>              # экспорт конфига в JSON
 odyssey config import <файл>              # импорт конфига из JSON
 odyssey doctor                            # проверка окружения и подключения
@@ -117,3 +119,10 @@ odyssey ready
 - All mutating commands require a bearer token (set via `odyssey auth login` or `ODYSSEY_TOKEN`).
 - Run events use `text/event-stream` and are printed raw to stdout.
 - Errors print to stderr and exit non-zero.
+
+## 🔒 Security
+
+- **Token encryption**: All tokens are encrypted at rest using Fernet (AES-128 with HMAC). The encryption key is stored in `~/.odyssey-cli/.key` with `0o600` permissions.
+- **No token in CLI args**: Never pass tokens via command-line arguments (they're visible in `ps aux`). Use `ODYSSEY_TOKEN` environment variable instead.
+- **Config file permissions**: `~/.odyssey-cli/config.json` is stored with `0o600` permissions (owner read/write only).
+- **Never share your token**: Treat your bearer token like a password. Anyone with your token can access your workspaces.
