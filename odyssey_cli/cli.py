@@ -216,6 +216,17 @@ def cmd_run_review(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.run_review(args.run_id))
 
 
+def cmd_run_list(args: argparse.Namespace, client: OdysseyClient) -> None:
+    runs = client.run_list(args.workspace_id)
+    for r in runs:
+        print(
+            f"{r.get('id')}  {r.get('status')}  {r.get('model', '-')}  "
+            f"{r.get('prompt', '')[:60]}  {r.get('created_at', '')[:16]}"
+        )
+    if not runs:
+        print("Нет ran.")
+
+
 def cmd_run_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.run_stop(args.run_id))
 
@@ -676,6 +687,10 @@ def build_parser() -> argparse.ArgumentParser:
         help="Human-readable colored output (default JSON lines)",
     )
     p.set_defaults(func=cmd_run_events)
+
+    p = runs_sub.add_parser("list", help="List runs in a workspace")
+    p.add_argument("workspace_id")
+    p.set_defaults(func=cmd_run_list)
 
     # processes
     proc = sub.add_parser("process", help="Background processes (workspace sandbox)")

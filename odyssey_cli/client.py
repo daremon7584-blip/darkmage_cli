@@ -361,6 +361,13 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def run_list(self, workspace_id: str) -> list[dict]:
+        resp = self._request(
+            "GET", f"/workspaces/{workspace_id}/runs"
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     # --- chat ---
     def chat_completion(
         self,

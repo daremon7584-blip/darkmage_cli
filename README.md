@@ -49,6 +49,7 @@ odyssey session list <workspace_id>
 
 odyssey run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
 odyssey run get <run_id>
+odyssey run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)
 odyssey run message <run_id> "additional context"   # or read from stdin with '-'
 odyssey run answer <run_id> <question_id> "yes"      # answer an ask_user question
 odyssey run context <run_id>                         # show context token usage
