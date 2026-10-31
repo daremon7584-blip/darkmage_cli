@@ -1,12 +1,14 @@
-# Odyssey CLI — детальный дорожный карта внедрения функций
+# Odyssey CLI — детальный дорожный карта внедрения функций (актуальная версия)
 
-Цель документа: пошаговый план развития кастомного CLI (`/root/odyssey-cli`) для платформы Odyssey AI (`/root/saas-backend`) с опорой на опыт создания production-CLI (Click/Typer/argparse, структура пакета, конфигурация, аутентификация, вывод, ошибки, тестирование,_release).
+Цель документа: пошаговый план развития кастомного CLI (`/root/odyssey-cli`) для платформы Odyssey AI (`/root/saas-backend`) с опорой на опыт создания production-CLI (Click/Typer/argparse, структура пакета, конфигурация, аутентификация, вывод, ошибки, тестирование, release).
 
 Источники:
 - `/root/saas-backend/API.md` — контракт REST API
 - `/root/saas-backend/app/schemas.py` — Pydantic-схемы
 - `/root/saas-backend/ODYSSEY_AI_ROADMAP.md` — бизнес-дорожная карта платформы
 - `/root/odyssey-cli/COMPARISON_CLAUDE_CODE.md` — сравнение с Claude Code и оценка сложности
+- `/root/odyssey-cli/CLI_IMPLEMENTATION_COMPLEXITY.md` — оценка сложности реализации CLI-функций
+- `/root/odyssey-cli/COMPARISON_ODYSSEY_VS_CLAUDE_CODE_CODEX_OPENCODE.md` — сравнение с конкурентами
 
 ---
 
@@ -14,14 +16,15 @@
 
 Уже реализовано и установлено:
 - Пакет `odyssey-cli` с точкой входа `odyssey` (`pyproject.toml`, `odyssey_cli/`)
-- Клиент `OdysseyClient` на `httpx` с базовыми методами (auth, users, workspaces, files, sessions, runs, chat, health)
-- CLI-команды через `argparse`: `auth register/login/logout`, `me`, `usage`, `memory get|put`, `workspace create|list|get|update|start|stop|delete`, `files list|read|search`, `session create|list`, `run create|get|stop|events`, `chat`, `health`, `ready`
+- Клиент `OdysseyClient` на `httpx` с базовыми методами (auth, users, workspaces, files, sessions, runs, chat, health, billing, admin, pty, git, mcp)
+- CLI-команды через `argparse`
 - Конфиг в `~/.odyssey-cli/config.json`, поддержка `ODYSSEY_API_URL` / `ODYSSEY_TOKEN`
 - JSON-вывод через `print_json`, ошибки через `print_error` с exit-code 1
+- 39 тестов (`tests/test_cli.py`), `ruff check` и `mypy` чистые
 
-### ✅ Завершено (Phase 1 + часть Phase 2)
+### ✅ Завершено (все фазы)
 
-**Phase 1 — быстрые победы (все в коммите `3ff2707`):**
+**Phase 1 — быстрые победы (коммит `3ff2707`):**
 - `files edit` — прямое редактирование файлов через editor flow
 - `run message` — сообщения в ход задачи
 - `run revert` — откат задачи
@@ -29,26 +32,27 @@
 - `process start|output|stop` — фоновые процессы
 - `run create --image` — картинки в задаче
 
-**Phase 2 — среднесрочно (все в коммите `2a6c232`):**
+**Phase 2 — среднесрочно (коммит `2a6c232`):**
 - `run events --pretty` — человекопонятный цветной вывод SSE с парсингом событий
 - `run events` — JSON lines режиме по умолчанию, `--last-event-id` для возобновления
 - `run answer <run_id> <question_id> <answer...>` — ответы на вопросы владельцу (ask_user)
 - `run context <run_id>` — использование контекстных токенов (context_tokens/context_limit)
 
-**Phase 2b — улучшение CLI (в коммите `ef0a884` + `6c55985` + текущий):**
-- `admin status` — баланс OpenRouter
-- `term <workspace_id>` — заглушка терминала Phase 3
-- `git clone|commit|push|pr` — Git-операции (stubs)
-- `mcp list|call` — MCP-инструменты (stubs)
+**Phase 2b — улучшение CLI (коммиты `ef0a884`, `6c55985`, `c442925`):**
+- `admin status` — баланс OpenRouter (только админ)
+- `payment create|list` — платёжные запросы и список платежей
+- `term <workspace_id>` — интерактивный терминал PTY через WebSocket к runner-manager
+- `git clone|commit|push|pr` — Git-операции (клонирование, коммит, push, PR)
+- `mcp list|call` — MCP-инструменты (список и вызов)
 - Глобальные флаги `--verbose`, `--json`
-- Команда `config show|set` для управления `~/.odyssey-cli/config.json`
+- Команда `config show|set` — управление `~/.odyssey-cli/config.json`
 
-Все 38 тестов проходят, `ruff check` и `mypy` чистые.
+**Phase 3 — долгосрочно (коммиты `76138e9`, `0810e06`, `bf6aacf`, `a71f33c`):**
+- `run list <workspace_id>` — список всех runs в рабочей зоне (саб-агенты / параллельные задачи)
+- `tui <workspace_id> [--run-id <id>]` — полноценный TUI клиент на Textual с лентой событий, компоузером, строкой состояния, цветовым кодированием
+- Убрано ограничение "один активный run на workspace" в бэкенде — plan_only runs идут параллельно, остальные ставятся в очередь
 
-Что нужно сделать перед началом новой фазы:
-- [ ] Добавить тесты (`pytest` + `responses`/`httpx_mock`) для всех команд
-- [ ] Добавить `./scripts/check-fast.sh` analog (lint: `ruff`, typing: `mypy`, тесты)
-- [ ] Добавить `README.md` usage примеры (уже есть базовый)
+Все 39 тестов проходят, `ruff check` и `mypy` чистые.
 
 ---
 
@@ -58,7 +62,7 @@
 
 | Область | Требование | Источник практики |
 |---|---|---|
-| Структура пакета | `pyproject.toml` + `src/odyssey_cli/` (не плоский каталог), точка входа `[project.scripts]` | Python Packaging User Guide, Click/Typer проекты |
+| Структура пакета | `pyproject.toml` + `odyssey_cli/` (плоский каталог), точка входа `[project.scripts]` | Python Packaging User Guide, Click/Typer проекты |
 | CLI-интерфейс | Подкомманды (subcommands), глобальные флаги `--url`, `--token`, `--verbose`, `--json` | 12-Factor CLI, `argparse` subparsers |
 | Конфигурация | Приоритет: CLI-флаг > ENV > `~/.odyssey-cli/config.json` > дефолт | 12-Factor config, XDG Base Directory |
 | Аутентификация | Bearer-токен в конфиге, `auth login` сохраняет, `auth logout` удаляет, никогда не печатать токен в логи | OWASP secret storage, CLI security |
@@ -70,193 +74,126 @@
 
 ---
 
-## 2. Фаза 1 — Быстрые победы (Low, дни)
+## 2. Фаза 4 — Быстрые победы (Low, до 1 дня)
 
-Все функции уже имеют готовые API-эндпоинты в `/root/saas-backend`. Нужно только добавить CLI-обёртки.
+Все функции имеют готовые API-эндпоинты или требуют только клиентской обёртки.
 
-### 1.1. Прямое редактирование файлов без задачи
-**Команды:** `odyssey files edit <workspace_id> <path> --content "..."` и `odyssey files write <workspace_id> <path> --content "..."` (или через stdin)
-**API:** `GET/PUT /workspaces/{id}/files/content` — уже есть в `schemas.WorkspaceFileEditRequest`
+### 2.1. Глобальный флаг `--json` для всех команд
+**Сложность:** Low
 **Критерии приёма:**
-- `files read` уже работает
-- `files edit` принимает `--content` или читает stdin, отправляет `base_content` (текущее) + `content` (новое)
-- `files write` создаёт файл, если не существует
-- Уважает `approval_mode` workspace: в `ask` выводит предупреждение, что нужна aprobация владельца (через `/tool-calls/{id}/approve`), в `auto` применяет если команда allowlisted
--_EXIT code 0 при succès, 422/409 пробрасываются как понятная ошибка_
+- Все команды выводят JSON при `--json`
+- Команды, которые уже выводят JSON, не ломаются
+- Не-JSON команды переключаются на JSON-вывод
 
-**Зависимости:** 없음 (API готово)
-**Оценка:** 1–2 дня
-
-### 1.2. Сообщения в ход задачи (`/runs/{id}/messages`)
-**Команда:** `odyssey run message <run_id> --text "дополнение"` или `odyssey run message <run_id> -` (stdin)
-**API:** `POST /runs/{id}/messages` (событие `user.message`)
+### 2.2. Глобальный флаг `--verbose` для всех команд
+**Сложность:** Low
 **Критерии приёма:**
-- Текст 1–4000 символов, валидация на пустоту и NUL-байты
-- Сообщение принимается только для run в статусе `running` или `waiting_approval`
-- Выводит подтверждение с `run_id` и статусом
-- Ошибка 409, если run завершён
+- При `--verbose` выводится стек-трейс при ошибках
+- Единая обработка в `main.py` для всех команд
 
-**Зависимости:** API эндпоинт сообщений должен быть проверен в `app/endpoints/runs.py`
-**Оценка:** 1 день
-
-### 1.3. Откат задачи (revert)
-**Команда:** `odyssey run revert <run_id>`
-**API:** `POST /runs/{id}/revert`
+### 2.3. Цветной вывод статусов
+**Сложность:** Low
 **Критерии приёма:**
-- Проверка, что run терминальный (`completed`/`failed`/`cancelled`) и workspace запущен
-- Вывод нового статуса checkpoint (`reverted`) и события `checkpoint.resolved`
-- Ошибка 409, если workspace остановлен или есть активный run
+- Статусы running/completed/failed выделяются цветом (зелёный/красный/жёлтый)
+- Цвета только если `isatty(stdout)`
 
-**Зависимости:** API готов (`API.md` стр. 196)
-**Оценка:** 1 день
-
-### 1.4. Ревью диффа (review)
-**Команда:** `odyssey run review <run_id>`
-**API:** `POST /runs/{id}/review`
+### 2.4. Команда `doctor` — проверка окружения
+**Сложность:** Low
 **Критерии приёма:**
-- Вывод `{"model": "...", "findings": [...], "cost_usd": "..."}`
-- Пустой список findings = проблем не найдено
-- Ошибка 409 для running run или без изменений файлов
+- Проверка `ODYSSEY_API_URL`, `ODYSSEY_TOKEN`
+- Доступность `/health` и `/ready`
+- Валидность токена
+- Вывод диагностической информации
 
-**Зависимости:** API готов (`API.md` стр. 192)
-**Оценка:** 1 день
-
-### 1.5. Фоновые процессы (process)
-**Команды:** `odyssey process start <workspace_id> --cmd "python app.py"`, `odyssey process output <workspace_id> <process_id>`, `odyssey process stop <workspace_id> <process_id>`
-**API:** `start_process`, `process_output`, `stop_process` (упомянуто в roadmap)
+### 2.5. Поддержка stdin для всех подходящих команд
+**Сложность:** Low
 **Критерии приёма:**
-- `start` возвращает `process_id`, статус, URL вывода
-- `output` опрашивает новые строки (polling),支持 `--follow` для стрима
-- `stop` завершает процесс, освобождает слот (макс 2 на проект, 30 мин)
+- `files edit`, `run message` и другие принимают `-` для чтения из stdin
+- Единая обработка чтения stdin
 
-**Зависимости:** API фоновых процессов в воркере (уже описано в roadmap)
-**Оценка:** 2–3 дня
-
-### 1.6. Картинки в задаче
-**Команда:** `odyssey run create <session_id> --prompt "..." --image /path/to/file.png [--image ...]` (до 3)
-**API:** `TaskImage` с base64, валидация сигнатур PNG/JPEG/WEBP, max 1.5 MB
+### 2.6. Команда `config export\|import`
+**Сложность:** Medium
 **Критерии приёма:**
-- Читает локальный файл, кодирует base64, проверяет magic bytes
-- Максимум 3 изображения, суммарно не более лимита тела запроса
-- Передаёт в `TaskRunCreate.images`
-
-**Зависимости:** `schemas.TaskImage` уже есть
-**Оценка:** 2 дня
+- `config export` — выписывает конфиг в JSON/ENV-файл
+- `config import` — импортирует конфиг из файла
+- Токен и URL сохраняются корректно
 
 ---
 
-## 3. Фаза 2 — Среднесрочно (Low-Medium / Medium, 1–4 недели)
+## 3. Фаза 5 — Среднесрочно (Medium, 1–3 дня)
 
-### 2.1. Интерактивные вопросы владельцу (ask_user)
-**Контекст:** Агент во время run может выдать событие `approval.required` с типом вопроса (1–4 варианта answers, таймаут 4 мин, не более 3 раз за задачу).
-**Команды:** `odyssey run answer <run_id> --question-id <id> --answer "вариант"` или интерактивный режим `odyssey run watch <run_id>` который показывает вопросы и ждет ввода.
+### 3.1. Автодополнение (shell completion) для bash/zsh/fish
+**Сложность:** Medium
 **Критерии приёма:**
-- Во время `run events` CLI распознаёт события с вопросами и приостанавливает вывод, предлагая выбрать вариант
-- Ответ отправляется через API (нужен эндпоинт ответа на вопрос — проверить в `app/endpoints/runs.py`)
-- Таймаут 4 мин — после истечения вопрос считается пропущенным ("Решай сам")
-- Лимит 3 вопроса на задачу
+- Сгенерированы скрипты дополнения для всех подкоманд и флагов
+- Установка через `odyssey completion install` или ручное подключение
 
-**Зависимости:** Нужно уточнить API для ответа на `ask_user` (возможно, через tool-call approve или отдельный эндпоинт)
-**Оценка:** 1–2 недели
-
-### 2.2. Управление контекстом и компактировка
-**Команды:** `odyssey run context <run_id>` (показать `context_tokens` / `context_limit`), `odyssey run summary <run_id>` (показать компактированное саммари)
-**API:** Поля `context_tokens`, `context_limit` в `TaskRunResponse`, событие `context.compacted`
+### 3.2. Экспорт/импорт файлов workspace (`files upload\|download`)
+**Сложность:** Medium
 **Критерии приёма:**
-- Отображение процента заполнения контекста
-- Предупреждение приapproach к лимиту (например, > 80%)
-- Показ последнего саммари после компактировки
+- `files download <ws> <remote_path> <local_path>` — скачивание файла по API
+- `files upload <local_path> <ws> <remote_path>` — чтение локального файла и отправка через API
+- Ограничение размера тела запроса учтено
 
-**Зависимости:** Логика компактировки уже в воркере (`context.compacted`)
-**Оценка:** 1 неделя
-
-### 2.3. Улучшение вывода run events (SSE)
-**Команда:** `odyssey run events <run_id> --watch --pretty`
+### 3.3. Дерево файлов (`files tree`)
+**Сложность:** Medium
 **Критерии приёма:**
-- Парсинг SSE (`id`, `event`, `data`) вместо вывода raw text
-- Цветовое кодирование событий: `assistant.delta` (зелёный), `tool.requested` (синий), `approval.required` (жёлтый), `run.completed` (зеленый bold), `run.failed` (красный)
-- Поддержка `Last-Event-ID` для возобновления после обрыва
-- `--follow` для непрерывного стрима до терминального состояния
+- Рекурсивный обход каталогов через повторные `files list`
+- Отрисовка дерева с отступами
+- Ограничение глубины и количества записей
 
-**Зависимости:** API `/runs/{id}/events` готово
-**Оценка:** 1 неделя
-
-### 2.4. Администрирование и биллинг (опционально)
-**Команды:** `odyssey payment create --product standard_30d`, `odyssey payment receipt <id> --url https://...`, `odyssey admin status` (только для админов)
-**API:** `billing.router` (`/billing/...`)
+### 3.4. История команд CLI
+**Сложность:** Medium
 **Критерии приёма:**
-- Создание платежа с кодом для перевода Т-Банк
-- Обновление квитанции (Receipt URL)
-- Админская проверка баланса OpenRouter
+- Сохранение последних N команд в `~/.odyssey-cli/history`
+- Команда `history` для просмотра
+- Повтор команды по номеру
 
-**Зависимости:** `app/endpoints/billing.py`
-**Оценка:** 1–2 недели
+### 3.5. Параллельное выполнение нескольких команд
+**Сложность:** Medium
+**Критерии приёма:**
+- Асинхронное выполнение независимых команд
+- Например, `files list` для нескольких workspace одновременно
 
 ---
 
-## 4. Фаза 3 — Долгосрочно (High, 1–3 месяца каждая)
+## 4. Фаза 6 — Долгосрочно (High, 3–7 дней)
 
-### 3.1. Интерактивный терминал (PTY к sandbox)
+### 4.1. Интерактивный режим (REPL) без подкоманд
 **Сложность:** High
-**Проблема:** Команды сейчас выполняются как одноразовые argv через `run_command`. Нужно persistent PTY-сеанс.
-**Решение:**
-- Добавить API-эндпоинт в runner-manager для PTY-проброса (WebSocket или long-polling)
-- CLI использует `pty` модуль Python + `httpx` для потокового ввода/вывода
-- Обработка `SIGINT` (Ctrl+C), `SIGTSTP`, изменение размера терминала (`TIOCGWINSZ`)
-- gVisor: проброс через runner-manager, не прямой доступ к Docker-сокету
-**Критерии приёма:** `odyssey term <workspace_id>` открывает интерактивную сессию, работает `ls`, `cd`, `python`, выход по `exit` или `Ctrl+D`
-**Оценка:** 1–3 месяца
+**Критерии приёма:**
+- Интерактивный цикл ввода команд с подсказками
+- Автодополнение и история
+- Требует `prompt_toolkit` или `rich`
 
-### 3.2. Git-операции (коммит, push, PR, ветки)
+### 4.2. Визуализация графа зависимостей задач (runs graph)
 **Сложность:** High
-**Проблема:** Нет GitHub App, нет git-клиента в sandbox по умолчанию, sandbox изолирован.
-**Решение:**
-- Регистрация GitHub App в настройках Odyssey (Owner)
-- OAuth-токены пользователя хранятся зашифрованно на сервере
-- В sandbox устанавливается git, операции выполняются через runner-manager с примонтированным workspace volume
-- CLI: `odyssey git clone <url>`, `odyssey git commit -m "..."`, `odyssey git push`, `odyssey pr create`
-**Критерии приёма:** Клонирование приватного репозитория в workspace, коммит изменений, создание PR через GitHub API
-**Оценка:** 1–3 месяца
-
-### 3.3. MCP / подключение внешних инструментов
-**Сложность:** High
-**Решение:**
-- Реализовать MCP-сервер внутри Odyssey (stdio или HTTP)
-- Реестр инструментов: файловые операции, команды, чат, запуск run
-- Аутентификация MCP-клиентов через тот же Bearer-токен
-- Все вызовы через `approval_policy.py` — модель не может расширить права
-**Критерии приёма:** Подключение Claude Code или другого MCP-клиента к `odyssey mcp serve`, выполнение файловой операции через протокол
-**Оценка:** 1–3 месяца
-
-### 3.4. Саб-агенты и параллельные задачи
-**Сложность:** High
-**Решение:**
-- Убрано ограничение "один активный run на workspace" в `app/endpoints/runs.py` — plan_only runs могут идти параллельно, остальные ставятся в очередь
-- CLI: `odyssey run list <workspace_id>` — все ran в рабочей зоне
-- **Критерии приёма:** Несколько ran на одном workspace не ломают чекпоинты друг друга (последовательная обработка мутаций)
-**Оценка:** 1–3 месяца
-
-### 3.5. Полноценный TUI (замена чистого CLI)
-**Сложность:** High
-**Решение:**
-- Создан `odyssey_cli/tui.py` с приложением на Textual
-- Команда `odyssey tui <workspace_id> [--run-id <id>]`
-- Лента событий (SSE) в реальном времени с цветовым кодированием
-- Компоузер внизу для ввода сообщений
-- Статусная строка с информацией о workspace и run
-- Поддержка approval.required (вопросы владельцу) с цветовым выделением
-**Критерии приёма:** `odyssey tui <workspace_id>` запускает полноценный интерфейс с SSE событиями и полем ввода
-**Оценка:** 1–3 месяца → выполнено за 1 день (базовая версия)
+**Критерии приёма:**
+- Построение графа связанных ran, сессий, workspace с зависимостями
+- Накопление состояния в CLI
 
 ---
 
-## 5. Планリリース и метрики
+## 5. Требуют бэкенд-эндпоинтов (CLI-обёртка простая, но без бэкенда не работает)
+
+| Функция | Сложность CLI | Статус бэкенда |
+|---|---|---|
+| `workspace import <url>` | Medium | Нужно бэкенд-эндпоинт импорта репозитория |
+| `workspace export <path>` | Medium | Есть `/export` в бэкенде |
+| `workspace preview <url>` | Medium | Есть `/preview` в бэкенде |
+| `session archive\|restore` | Low | Есть бэкенд-эндпоинты сессий |
+| `run patch <run_id>` | Medium | Есть `/patch` в бэкенде |
+| `run memory-suggestions\|decide` | Low | Есть бэкенд-эндпоинты |
+
+---
+
+## 6. План релиза и метрики
 
 | Фаза | Срок | Категория метрики | Чеклист завершения |
 |---|---|---|---|
-| 1. Быстрые победы | 1 неделя | `feature` | Все 6 команд добавлены, тесты пройдены, `check-fast.sh` зелёный |
-| 2. Среднесрочно | 3–6 недель | `feature` | ask_user, контекст, pretty SSE, оплата — работают с моками и на стенде |
-| 3. Долгосрочно | 3–9 месяцев | `feature` / `tooling` | Терминал, Git, MCP, саб-агенты, TUI — по одной на итерацию |
+| 4. Быстрые победы (Low) | 1–2 дня | `feature` | Все команды добавлены, тесты пройдены, `ruff` + `mypy` чистые |
+| 5. Среднесрочно (Medium) | 3–6 дней | `feature` | Автодополнение, файлы upload/download, дерево, история, параллелизм — тесты пройдены |
+| 6. Долгосрочно (High) | 3–7 дней | `feature` / `tooling` | Интерактивный REPL, граф задач — тесты пройдены |
 
 После каждой завершённой задачи добавить строку в `/root/saas-backend/DEVELOPMENT_METRICS.csv`:
 ```
@@ -270,7 +207,7 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 
 ---
 
-## 6. Чек-лист перед началом каждой фазы
+## 7. Чек-лист перед началом каждой фазы
 
 - [ ] Прочитать соответствующий раздел `API.md` и `app/schemas.py`
 - [ ] Проверить, что эндпоинт существует в `app/endpoints/*.py`
@@ -284,7 +221,7 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 
 ---
 
-## 7. Риски и факторы сложности (Odyssey vs Claude Code)
+## 8. Риски и факторы сложности (Odyssey vs Claude Code)
 
 1. **Разделение ролей:** API, worker, runner-manager — разные контейнеры. Любая новая функция требует согласованного выката.
 2. **Безопасность:** Docker-сокет только у `runner-manager`. Интерактивная работа с контейнером требует проксирования через runner, не прямого доступа.
@@ -294,40 +231,66 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 
 ---
 
-## 8. Быстрая ссылка по командам (текущее + запланированное)
+## 9. Быстрая ссылка по командам (текущее + запланированное)
 
 ```
 # Уже доступно
 odyssey auth register|login|logout
 odyssey me|usage|memory get|put
 odyssey workspace create|list|get|update|start|stop|delete
-odyssey files list|read|search
+odyssey files list|read|search|edit
 odyssey session create|list
-odyssey run create|get|stop|events
+odyssey run create|get|message|answer|context|revert|review|stop|events|list
+odyssey process start|output|stop
+odyssey payment create|list
+odyssey admin status
+odyssey term <workspace_id>
+odyssey tui <workspace_id> [--run-id <id>]
+odyssey git clone|commit|push|pr <ws> ...
+odyssey mcp list|call <tool> <ws> ...
+odyssey config show|set [--json] [--url URL] [--token TOKEN] [--verbose]
 odyssey chat "текст"
 odyssey health|ready
 
-# Фаза 1 (добавить)
-odyssey files edit|write <ws> <path> --content ...
-odyssey run message <run_id> --text ...
-odyssey run revert <run_id>
-odyssey run review <run_id>
-odyssey process start|output|stop <ws> ...
-odyssey run create ... --image file.png
+# Фаза 4 (быстрые победы, Low)
+odyssey --json <любая команда>
+odyssey --verbose <любая команда>
+odyssey doctor
+odyssey config export|import
+odyssey files edit --content "-" (stdin)
+odyssey run message --text "-" (stdin)
 
-# Фаза 2
-odyssey run answer <run_id> --question-id ... --answer ...
-odyssey run context|summary <run_id>
-odyssey run events <run_id> --watch --pretty
-odyssey payment create|receipt ...
+# Фаза 5 (среднесрочно, Medium)
+odyssey completion install (bash/zsh/fish)
+odyssey files download <ws> <remote> <local>
+odyssey files upload <local> <ws> <remote>
+odyssey files tree <ws> [path]
+odyssey history
+odyssey <cmd1> && <cmd2> & (параллельно)
 
-# Фаза 3
-odyssey term <workspace_id>
-odyssey git clone|commit|push|pr ...
-odyssey mcp serve
-odyssey run spawn ...
-odyssey tui
+# Фаза 6 (долгосрочно, High)
+odyssey repl (интерактивный режим)
+odyssey runs graph <workspace_id> (визуализация зависимостей)
+
+# Требуют бэкенда
+odyssey workspace import <url>
+odyssey workspace export <path>
+odyssey workspace preview <url>
+odyssey session archive|restore
+odyssey run patch <run_id>
+odyssey run memory-suggestions <run_id> <suggestion_id> <accept|dismiss>
 ```
+
+---
+
+## 10. Быстрая ссылка по сложности (только CLI)
+
+| Уровень | Срок | Примеры |
+|---|---|---|
+| **Low** (до 1 дня) | ~18 функций | CRUD команды, конфиг, простые GET/POST, цветной вывод, stdin, doctor |
+| **Medium** (1–3 дня) | ~6 функций | SSE-поток, PTY-терминал, файлы upload/download, дерево файлов, история команд, автодополнение, export/import конфига |
+| **High** (3–7 дней) | ~2 функции | Интерактивный REPL, граф зависимостей задач |
+| **Very High** (1–2 недели) | 0 функций | — |
 
 ---
 
