@@ -61,6 +61,9 @@ odyssey process start <workspace_id> <cmd> [args...] [--cwd /workspace] [--port 
 odyssey process output <workspace_id> [process_id]
 odyssey process stop <workspace_id> <process_id>
 
+odyssey payment create [--product standard_30d|credits] [--amount-rub N]  # ссылка на сайт для оплаты
+odyssey payment list                                                       # список своих платежей
+
 odyssey chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 0.7] [--max-tokens 1000]
 
 odyssey health

@@ -251,6 +251,34 @@ def cmd_process_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.process_stop(args.workspace_id, args.process_id))
 
 
+def cmd_payment_create(args: argparse.Namespace, client: OdysseyClient) -> None:
+    data = client.payment_create(args.product, args.amount_rub)
+    link = data.get("payment_link")
+    code = data.get("code")
+    status = data.get("status")
+    amount = data.get("amount_rub")
+    product = data.get("product")
+    print(f"Платеж создан: {product} на {amount} ₽")
+    print(f"Статус: {status}")
+    if code:
+        print(f"Код для перевода: {code}")
+    if link:
+        print(f"Ссылка для оплаты: {link}")
+        print("Перейдите по ссылке, оплатите и пришлите чек владельцу.")
+    print_json(data)
+
+
+def cmd_payment_list(args: argparse.Namespace, client: OdysseyClient) -> None:
+    payments = client.payment_list()
+    for p in payments:
+        print(
+            f"{p.get('id')}  {p.get('product')}  {p.get('amount_rub')} ₽  "
+            f"{p.get('status')}  {p.get('created_at', '')[:16]}"
+        )
+    if not payments:
+        print("Платежей нет.")
+
+
 def cmd_chat(args: argparse.Namespace, client: OdysseyClient) -> None:
     messages = [{"role": "user", "content": args.message}]
     if args.system:
@@ -473,6 +501,28 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("workspace_id")
     p.add_argument("process_id")
     p.set_defaults(func=cmd_process_stop)
+
+    # billing
+    billing = sub.add_parser("payment", help="Платежи и тарифы")
+    billing_sub = billing.add_subparsers(dest="payment_command", required=True)
+
+    p = billing_sub.add_parser("create", help="Создать запрос на оплату (ссылка на сайт)")
+    p.add_argument(
+        "--product",
+        choices=["standard_30d", "credits"],
+        default="standard_30d",
+        help="standard_30d — тариф Стандарт на 30 дней, credits — пакет кредитов",
+    )
+    p.add_argument(
+        "--amount-rub",
+        type=int,
+        default=None,
+        help="Сумма в рублях (только для credits; из доступных пакетов настроек сервера)",
+    )
+    p.set_defaults(func=cmd_payment_create)
+
+    p = billing_sub.add_parser("list", help="Список своих платежей")
+    p.set_defaults(func=cmd_payment_list)
 
     # chat
     p = sub.add_parser("chat", help="Chat completion")

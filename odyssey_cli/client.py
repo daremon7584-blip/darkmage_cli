@@ -392,6 +392,22 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- billing ---
+    def payment_create(
+        self, product: str = "standard_30d", amount_rub: int | None = None
+    ) -> dict:
+        body: dict[str, Any] = {"product": product}
+        if amount_rub is not None:
+            body["amount_rub"] = amount_rub
+        resp = self._request("POST", "/billing/payments", json=body)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def payment_list(self) -> list[dict]:
+        resp = self._request("GET", "/billing/payments")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def process_start(
         self, workspace_id: str, argv: list[str], cwd: str | None = None, port: int | None = None
     ) -> dict:

@@ -354,3 +354,66 @@ def test_color_non_tty(monkeypatch):
     assert _color("text", "run.completed") == "text"
     assert _RESET == "\033[0m"
 
+
+# ---------------------------------------------------------------------------
+# payment_create / payment_list
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_payment_create_standard(mock_request):
+    mock_request.return_value = _make_response(201, {
+        "id": "pay-1",
+        "code": "ODY-ABCDE",
+        "product": "standard_30d",
+        "amount_rub": 990,
+        "status": "pending",
+        "payment_link": "https://example.com/pay",
+        "created_at": "2026-10-31T10:00:00Z",
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.payment_create("standard_30d")
+    assert result["product"] == "standard_30d"
+    assert result["amount_rub"] == 990
+    assert result["payment_link"] == "https://example.com/pay"
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/billing/payments"
+    assert kwargs["json"]["product"] == "standard_30d"
+    assert kwargs["json"].get("amount_rub") is None
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_payment_create_credits(mock_request):
+    mock_request.return_value = _make_response(201, {
+        "id": "pay-2",
+        "code": "ODY-FGHIJ",
+        "product": "credits",
+        "amount_rub": 1000,
+        "status": "pending",
+        "payment_link": "https://example.com/pay",
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.payment_create("credits", amount_rub=1000)
+    assert result["product"] == "credits"
+    assert result["amount_rub"] == 1000
+    _call_args, kwargs = mock_request.call_args
+    assert kwargs["json"]["product"] == "credits"
+    assert kwargs["json"]["amount_rub"] == 1000
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_payment_list(mock_request):
+    mock_request.return_value = _make_response(200, [
+        {"id": "pay-1", "product": "standard_30d", "amount_rub": 990, "status": "confirmed", "created_at": "2026-10-31T09:00:00Z"},
+        {"id": "pay-2", "product": "credits", "amount_rub": 1000, "status": "pending", "created_at": "2026-10-31T10:00:00Z"},
+    ])
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.payment_list()
+    assert len(result) == 2
+    assert result[0]["status"] == "confirmed"
+    assert result[1]["status"] == "pending"
+    call_args, _kwargs = mock_request.call_args
+    assert call_args[0] == "GET"
+    assert call_args[1] == "/billing/payments"
+
