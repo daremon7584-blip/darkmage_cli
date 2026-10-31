@@ -7,6 +7,7 @@ and httpx.Client.get so no real network is used.
 from __future__ import annotations
 
 import base64
+import sys
 from unittest.mock import MagicMock, patch
 
 import pytest
@@ -231,3 +232,125 @@ def test_process_stop(mock_request):
     call_args, _kwargs = mock_request.call_args
     assert call_args[0] == "POST"
     assert call_args[1] == "/workspaces/ws-1/processes/proc-1/stop"
+
+
+# ---------------------------------------------------------------------------
+# run_answer
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_run_answer(mock_request):
+    mock_request.return_value = _make_response(200, {"question_id": "q1", "answers": ["yes"]})
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.run_answer("run-1", "q1", ["yes"])
+    assert result["answers"] == ["yes"]
+    call_args, kwargs = mock_request.call_args
+    assert call_args[0] == "POST"
+    assert call_args[1] == "/runs/run-1/questions/q1"
+    assert kwargs["json"]["answers"] == ["yes"]
+
+
+# ---------------------------------------------------------------------------
+# run_context
+# ---------------------------------------------------------------------------
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_run_context(mock_request):
+    mock_request.return_value = _make_response(200, {
+        "run_id": "run-1",
+        "status": "running",
+        "context_tokens": 5000,
+        "context_limit": 96000,
+        "prompt_tokens": 1000,
+        "completion_tokens": 500,
+    })
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    result = client.run_context("run-1")
+    assert result["context_tokens"] == 5000
+    assert result["context_limit"] == 96000
+    call_args, _kwargs = mock_request.call_args
+    assert call_args[0] == "GET"
+    assert call_args[1] == "/runs/run-1"
+
+
+# ---------------------------------------------------------------------------
+# run_events_parsed
+# ---------------------------------------------------------------------------
+
+
+def _stream_lines(lines):
+    class FakeResponse:
+        def __init__(self, lines):
+            self._lines = lines
+            self.status_code = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *a):
+            pass
+
+        def iter_lines(self):
+            yield from self._lines
+
+    return FakeResponse(lines)
+
+
+@patch("odyssey_cli.client.OdysseyClient._request")
+def test_run_events_parsed(mock_request):
+    lines = [
+        "id: 1",
+        "event: run.started",
+        "data: {\"status\":\"queued\"}",
+        "",
+        "id: 2",
+        "event: assistant.delta",
+        'data: {"text":"Hello"}',
+        "",
+        ": keep-alive",
+        "",
+        "id: 3",
+        "event: run.completed",
+        'data: {"finish_reason":"stop"}',
+        "",
+    ]
+    fake_stream = _stream_lines(lines)
+    mock_request.return_value = fake_stream
+    client = OdysseyClient(base_url="http://localhost:8000", token="test-token")
+    # Stream context manager is used; _request returns the fake response directly.
+    client._client.stream = lambda method, url, headers=None: fake_stream
+    events = list(client.run_events_parsed("run-1", last_event_id=0))
+    assert len(events) == 3
+    assert events[0] == {"id": "1", "event": "run.started", "data": {"status": "queued"}}
+    assert events[1] == {"id": "2", "event": "assistant.delta", "data": {"text": "Hello"}}
+    assert events[2] == {"id": "3", "event": "run.completed", "data": {"finish_reason": "stop"}}
+
+
+# ---------------------------------------------------------------------------
+# _format_event / _color
+# ---------------------------------------------------------------------------
+
+
+def test_format_event_assistant():
+    from odyssey_cli.cli import _format_event
+    ev = {"id": "5", "event": "assistant.delta", "data": {"text": "Hello world"}}
+    line = _format_event(ev)
+    assert "assistant.delta" in line
+    assert "Hello world" in line
+
+
+def test_format_event_tool_requested():
+    from odyssey_cli.cli import _format_event
+    ev = {"id": "6", "event": "tool.requested", "data": {"name": "write_file", "arguments": {"path": "a.py"}}}
+    line = _format_event(ev)
+    assert "write_file" in line
+
+
+def test_color_non_tty(monkeypatch):
+    from odyssey_cli.cli import _RESET, _color
+    monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
+    assert _color("text", "run.completed") == "text"
+    assert _RESET == "\033[0m"
+

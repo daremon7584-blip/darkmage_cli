@@ -50,10 +50,12 @@ odyssey session list <workspace_id>
 odyssey run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
 odyssey run get <run_id>
 odyssey run message <run_id> "additional context"   # or read from stdin with '-'
+odyssey run answer <run_id> <question_id> "yes"      # answer an ask_user question
+odyssey run context <run_id>                         # show context token usage
 odyssey run revert <run_id>
 odyssey run review <run_id>
 odyssey run stop <run_id>
-odyssey run events <run_id> [--last-event-id ...]
+odyssey run events <run_id> [--last-event-id N] [--pretty]
 
 odyssey process start <workspace_id> <cmd> [args...] [--cwd /workspace] [--port 8080]
 odyssey process output <workspace_id> [process_id]

@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
 
@@ -284,6 +285,64 @@ class OdysseyClient:
         )
         self._raise_for_status(resp)
         return resp.text
+
+    def run_events_parsed(
+        self, run_id: str, last_event_id: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """Stream parsed SSE events from /runs/{run_id}/events.
+
+        Yields dicts with keys: id, event, data, _at.
+        Stops after the run reaches a terminal state.
+        """
+        headers = dict(self._headers())
+        headers["Accept"] = "text/event-stream"
+        if last_event_id is not None:
+            headers["Last-Event-ID"] = str(last_event_id)
+        with self._client.stream(
+            "GET", f"{self.base_url}/runs/{run_id}/events", headers=headers
+        ) as resp:
+            self._raise_for_status(resp)
+            for raw_line in resp.iter_lines():
+                if not raw_line:
+                    continue
+                if raw_line.startswith(":"):
+                    continue  # keep-alive
+                if raw_line.startswith("id: "):
+                    event_id = raw_line[4:]
+                elif raw_line.startswith("event: "):
+                    event_type = raw_line[7:]
+                elif raw_line.startswith("data: "):
+                    try:
+                        payload = json.loads(raw_line[6:])
+                    except json.JSONDecodeError:
+                        payload = {"raw": raw_line[6:]}
+                    yield {
+                        "id": event_id,
+                        "event": event_type,
+                        "data": payload,
+                    }
+                    event_id = ""
+                    event_type = ""
+
+    def run_answer(self, run_id: str, question_id: str, answers: list[str]) -> dict:
+        resp = self._request(
+            "POST",
+            f"/runs/{run_id}/questions/{question_id}",
+            json={"answers": answers},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def run_context(self, run_id: str) -> dict:
+        run = self.run_get(run_id)
+        return {
+            "run_id": run_id,
+            "status": run.get("status"),
+            "context_tokens": run.get("context_tokens"),
+            "context_limit": run.get("context_limit"),
+            "prompt_tokens": run.get("prompt_tokens"),
+            "completion_tokens": run.get("completion_tokens"),
+        }
 
     def run_message(self, run_id: str, text: str) -> dict:
         resp = self._request(

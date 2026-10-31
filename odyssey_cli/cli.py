@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import argparse
+import json
 import sys
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
@@ -114,6 +115,65 @@ def cmd_session_list(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.session_list(args.workspace_id, args.limit))
 
 
+# ANSI colors for pretty SSE output (only used when stdout is a TTY).
+_COLORS = {
+    "run.started": "\033[1;34m",      # bold blue
+    "assistant.delta": "\033[1;32m",  # bold green
+    "tool.requested": "\033[1;36m",   # bold cyan
+    "tool.started": "\033[1;36m",
+    "tool.output": "\033[0;36m",
+    "approval.required": "\033[1;33m",  # bold yellow
+    "approval.resolved": "\033[0;33m",
+    "checkpoint.ready": "\033[1;35m",   # bold magenta
+    "checkpoint.resolved": "\033[0;35m",
+    "diff.ready": "\033[1;35m",
+    "run.completed": "\033[1;32m",      # bold green
+    "run.failed": "\033[1;31m",         # bold red
+    "run.cancelled": "\033[1;31m",
+    "user.message": "\033[1;37m",       # bold white
+    "agent.question": "\033[1;33m",
+    "agent.answer": "\033[0;33m",
+    "context.compacted": "\033[1;34m",
+}
+_RESET = "\033[0m"
+
+
+def _color(text: str, event_type: str) -> str:
+    if not sys.stdout.isatty():
+        return text
+    return f"{_COLORS.get(event_type, '')}{text}{_RESET}"
+
+
+def _format_event(ev: dict) -> str:
+    eid = ev.get("id", "")
+    etype = ev.get("event", "")
+    data = ev.get("data", {})
+    if isinstance(data, dict):
+        detail = ""
+        if etype == "assistant.delta":
+            detail = data.get("text", "")
+        elif etype == "tool.requested":
+            detail = f"{data.get('name', '')} {json.dumps(data.get('arguments', {}))[:80]}"
+        elif etype == "tool.output":
+            detail = str(data.get("output", ""))[:120]
+        elif etype == "approval.required":
+            detail = f"{data.get('name', '')} path={data.get('path', '')}"
+        elif etype == "approval.resolved":
+            detail = f"{data.get('decision', '')} scope={data.get('scope', '')}"
+        elif etype == "run.completed":
+            detail = f"finish_reason={data.get('finish_reason', '')}"
+        elif etype == "run.failed":
+            detail = f"error={data.get('error', '')}"
+        elif etype == "context.compacted":
+            detail = f"dropped={data.get('dropped_messages', '')} before={data.get('tokens_before', '')} after={data.get('tokens_after', '')}"
+        elif etype == "agent.question":
+            detail = data.get("question", "")
+        elif etype == "agent.answer":
+            detail = f"answers={data.get('answers', [])}"
+        return f"[{eid}] {etype}: {detail}"
+    return f"[{eid}] {etype}: {data}"
+
+
 def cmd_run_create(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(
         client.run_create(
@@ -138,6 +198,15 @@ def cmd_run_message(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.run_message(args.run_id, text))
 
 
+def cmd_run_answer(args: argparse.Namespace, client: OdysseyClient) -> None:
+    answers = args.answer if isinstance(args.answer, list) else [args.answer]
+    print_json(client.run_answer(args.run_id, args.question_id, answers))
+
+
+def cmd_run_context(args: argparse.Namespace, client: OdysseyClient) -> None:
+    print_json(client.run_context(args.run_id))
+
+
 def cmd_run_revert(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.run_revert(args.run_id))
 
@@ -151,8 +220,16 @@ def cmd_run_stop(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_run_events(args: argparse.Namespace, client: OdysseyClient) -> None:
-    text = client.run_events(args.run_id, args.last_event_id)
-    print(text, end="")
+    last_id = args.last_event_id
+    pretty = args.pretty
+    for ev in client.run_events_parsed(args.run_id, last_id):
+        line = _format_event(ev)
+        if pretty:
+            print(_color(line, ev.get("event", "")))
+        else:
+            print(json.dumps(ev, ensure_ascii=False))
+        if ev.get("event") in {"run.completed", "run.failed", "run.cancelled"}:
+            break
 
 
 def cmd_process_start(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -344,6 +421,16 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("text", help="Message text, or '-' to read from stdin")
     p.set_defaults(func=cmd_run_message)
 
+    p = runs_sub.add_parser("answer", help="Answer an ask_user question from the agent")
+    p.add_argument("run_id")
+    p.add_argument("question_id")
+    p.add_argument("answer", nargs="+", help="Answer text(s), one per offered option")
+    p.set_defaults(func=cmd_run_answer)
+
+    p = runs_sub.add_parser("context", help="Show run context token usage")
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_context)
+
     p = runs_sub.add_parser("revert", help="Revert a finished task")
     p.add_argument("run_id")
     p.set_defaults(func=cmd_run_revert)
@@ -358,7 +445,12 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = runs_sub.add_parser("events", help="Stream run events (SSE)")
     p.add_argument("run_id")
-    p.add_argument("--last-event-id", default=None, dest="last_event_id")
+    p.add_argument("--last-event-id", type=int, default=None, dest="last_event_id")
+    p.add_argument(
+        "--pretty",
+        action="store_true",
+        help="Human-readable colored output (default JSON lines)",
+    )
     p.set_defaults(func=cmd_run_events)
 
     # processes
