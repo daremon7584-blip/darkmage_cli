@@ -1,12 +1,13 @@
 from __future__ import annotations
 
 import argparse
+import getpass
 import json
 import sys
 from typing import Any, cast
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
-from .config import load_config
+from .config import CONFIG_DIR, CONFIG_FILE, load_config, save_config
 
 
 def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -30,6 +31,138 @@ def cmd_login(args: argparse.Namespace, client: OdysseyClient) -> None:
 def cmd_logout(args: argparse.Namespace, client: OdysseyClient) -> None:
     client.logout()
     print("Logged out.")
+
+
+def cmd_auth_interactive(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Интерактивный вход/регистрация как в Claude Code."""
+
+    print("👋 Добро пожаловать в Odyssey AI")
+    print()
+
+    # Проверяем, уже есть ли токен
+    config = load_config()
+    if config.get("token") and config.get("base_url"):
+        print(f"Вы уже вошли как токен: {config['token'][:8]}...")
+        print("Используйте 'odyssey auth logout' для выхода.")
+        return
+
+    email = input("Email: ").strip()
+    if not email:
+        print("Ошибка: email не может быть пустым.")
+        return
+
+    password = getpass.getpass("Пароль: ")
+    if not password:
+        print("Ошибка: пароль не может быть пустым.")
+        return
+
+    full_name = input("Полное имя (опционально): ").strip() or None
+
+    try:
+        # Пробуем войти
+        data = client.login(email, password)
+        token = data.get("access_token")
+        if token:
+            from .config import set_token
+            set_token(token)
+            client.token = token
+            print(f"\n✅ Вход выполнен как {email}")
+            return
+    except OdysseyError as exc:
+        if "already exists" in str(exc).lower() or "not found" in str(exc).lower():
+            pass  # Регистрируемся ниже
+        else:
+            print(f"Ошибка входа: {exc}")
+            return
+
+    # Регистрируемся
+    print("Аккаунт не найден. Регистрация нового аккаунта...")
+    try:
+        data = client.register(email, password, full_name)
+        token = data.get("access_token")
+        if token:
+            from .config import set_token
+            set_token(token)
+            client.token = token
+            print(f"\n✅ Аккаунт создан и вход выполнен как {email}")
+        else:
+            print(f"Не удалось зарегистрироваться: {data}")
+    except OdysseyError as exc:
+        print(f"Ошибка регистрации: {exc}")
+        return
+
+    # Предлагаем открыть рабочую зону
+    print()
+    print("🎉 Готово! Теперь вы можете:")
+    print("  odyssey workspace list   — посмотреть рабочие зоны")
+    print("  odyssey tui <workspace_id> — открыть интерактивный терминал")
+
+
+def cmd_login_alias(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Alias для auth interactive."""
+    cmd_auth_interactive(args, client)
+
+
+def cmd_start(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Запуск интерактивного сеанса как в Claude Code."""
+    from .config import load_config
+
+    config = load_config()
+    token = config.get("token")
+    base_url = config.get("base_url")
+
+    if not token:
+        print("🔐 Токен не найден. Нужно войти в систему.")
+        cmd_auth_interactive(args, client)
+        config = load_config()
+        token = config.get("token")
+        if not token:
+            print("Не удалось войти. Попробуйте позже.")
+            return
+
+    # Обновляем клиент с токеном
+    client.token = token
+    client.base_url = base_url or client.base_url
+
+    # Показываем рабочие зоны
+    print("\n📋 Ваши рабочие зоны:")
+    try:
+        workspaces = client.workspace_list()
+        if not workspaces:
+            print("   Рабочие зоны не найдены. Создайте новую: odyssey workspace create --name <имя>")
+            return
+        for i, ws in enumerate(workspaces, 1):
+            status = _color_status(ws.get("status", ""))
+            print(f"  {i}. {ws.get('name')} ({ws.get('id')}) [{status}]")
+    except OdysseyError as exc:
+        print(f"Ошибка получения рабочих зон: {exc}")
+        return
+
+    # Выбор рабочей зоны
+    choice = input("\nВыберите рабочую зону (номер) или нажмите Enter для отмены: ").strip()
+    if not choice:
+        print("Отменено.")
+        return
+
+    try:
+        idx = int(choice) - 1
+        if idx < 0 or idx >= len(workspaces):
+            print("Неверный номер.")
+            return
+        workspace_id = workspaces[idx]["id"]
+    except ValueError:
+        print("Неверный номер.")
+        return
+
+    # Запуск TUI
+    print(f"\n🚀 Запуск рабочей зоны {workspaces[idx]['name']}...")
+    from .tui import run_tui
+
+    run_tui(
+        base_url=client.base_url,
+        token=client.token,
+        workspace_id=workspace_id,
+    )
 
 
 def cmd_me(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -601,7 +734,7 @@ def cmd_tui(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
-    from .config import CONFIG_FILE, load_config
+    from .config import load_config
 
     config = load_config()
     if args.json:
@@ -655,7 +788,6 @@ def cmd_config_export(args: argparse.Namespace, client: OdysseyClient) -> None:
 def cmd_config_import(args: argparse.Namespace, client: OdysseyClient) -> None:
     import json
 
-    from .config import save_config
 
     try:
         with open(args.input, "r", encoding="utf-8") as f:
@@ -671,7 +803,6 @@ def cmd_history(args: argparse.Namespace, client: OdysseyClient) -> None:
     """Показать или повторить предыдущие команды CLI."""
     import json
 
-    from .config import CONFIG_DIR
 
     history_file = CONFIG_DIR / "history.json"
     try:
@@ -1034,6 +1165,9 @@ def build_parser() -> argparse.ArgumentParser:
     p = auth_sub.add_parser("logout", help="Remove saved token")
     p.set_defaults(func=cmd_logout)
 
+    p = auth_sub.add_parser("interactive", help="Интерактивный вход/регистрация (как в Claude Code)")
+    p.set_defaults(func=cmd_auth_interactive)
+
     # --- user ---
     sub.add_parser("me", help="Current user").set_defaults(func=cmd_me)
     sub.add_parser("usage", help="Spend windows").set_defaults(func=cmd_usage)
@@ -1348,6 +1482,8 @@ def build_parser() -> argparse.ArgumentParser:
     sub.add_parser("health", help="Liveness").set_defaults(func=cmd_health)
     sub.add_parser("ready", help="Readiness").set_defaults(func=cmd_ready)
     sub.add_parser("doctor", help="Проверка окружения и подключения").set_defaults(func=cmd_doctor)
+    sub.add_parser("login", help="Войти в систему (интерактивно)").set_defaults(func=cmd_login_alias)
+    sub.add_parser("start", help="Запустить интерактивный сеанс (как в Claude Code)").set_defaults(func=cmd_start)
     completion = sub.add_parser("completion", help="Генерация скриптов автодополнения для shell")
     completion.add_argument(
         "shell",

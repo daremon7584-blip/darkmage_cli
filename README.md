@@ -16,7 +16,23 @@ export ODYSSEY_API_URL=http://your-server:8000   # default: http://localhost:800
 export ODYSSEY_TOKEN=...                         # or log in via the CLI
 ```
 
-Token is saved to `~/.odyssey-cli/config.json` after `odyssey auth login`.
+Token is saved to `~/.odyssey-cli/config.json` after `odyssey auth login` or `odyssey auth interactive`.
+
+## Quick Start
+
+```bash
+# 1. Настроить сервер
+odyssey config set --url http://localhost:8000
+
+# 2. Войти (интерактивно, как в Claude Code)
+odyssey login
+
+# 3. Открыть интерактивный терминал (TUI)
+odyssey tui <workspace_id>
+
+# Или всё в одной команде:
+odyssey start
+```
 
 ## Usage
 
