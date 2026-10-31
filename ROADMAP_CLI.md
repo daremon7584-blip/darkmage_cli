@@ -19,6 +19,24 @@
 - Конфиг в `~/.odyssey-cli/config.json`, поддержка `ODYSSEY_API_URL` / `ODYSSEY_TOKEN`
 - JSON-вывод через `print_json`, ошибки через `print_error` с exit-code 1
 
+### ✅ Завершено (Phase 1 + часть Phase 2)
+
+**Phase 1 — быстрые победы (все в коммите `3ff2707`):**
+- `files edit` — прямое редактирование файлов через editor flow
+- `run message` — сообщения в ход задачи
+- `run revert` — откат задачи
+- `run review` — ревью диффа
+- `process start|output|stop` — фоновые процессы
+- `run create --image` — картинки в задаче
+
+**Phase 2 — среднесрочно (все в коммите `2a6c232`):**
+- `run events --pretty` — человекопонятный цветной вывод SSE с парсингом событий
+- `run events` — JSON lines режиме по умолчанию, `--last-event-id` для возобновления
+- `run answer <run_id> <question_id> <answer...>` — ответы на вопросы владельцу (ask_user)
+- `run context <run_id>` — использование контекстных токенов (context_tokens/context_limit)
+
+Все 23 теста проходят, `ruff check` и `mypy` чистые.
+
 Что нужно сделать перед началом новой фазы:
 - [ ] Добавить тесты (`pytest` + `responses`/`httpx_mock`) для всех команд
 - [ ] Добавить `./scripts/check-fast.sh` analog (lint: `ruff`, typing: `mypy`, тесты)
