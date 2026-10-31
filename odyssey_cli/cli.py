@@ -297,16 +297,100 @@ def cmd_admin_status(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_term(args: argparse.Namespace, client: OdysseyClient) -> None:
-    """Интерактивный терминал workspace (PTY через runner-manager).
+    """Интерактивный терминал workspace (PTY через runner-manager)."""
+    import asyncio
+    import os
+    import pty
+    import select
+    import subprocess
+    import sys
+    import termios
+    import tty
 
-    Требует бэкенд API для проброски PTY — пока заглушка с подсказкой.
-    """
-    print(
-        f"Терминал workspace {args.workspace_id} пока недоступен: "
-        "нужен бэкенд эндпоинт для PTY-проброски через runner-manager "
-        "(Phase 3, сложность High)."
+    import websockets  # type: ignore[import-not-found]
+
+    result = client.pty_create(args.workspace_id)
+    session_id = result["session_id"]
+    print(f"PTY session {session_id}. Ctrl-D or 'exit' to quit.\n", end="")
+
+    master_fd, slave_fd = pty.openpty()
+    proc = subprocess.Popen(
+        ["sh"],
+        stdin=slave_fd,
+        stdout=slave_fd,
+        stderr=slave_fd,
+        close_fds=True,
     )
-    print("Доступно сейчас: odyssey process start|output|stop")
+    os.close(slave_fd)
+
+    old_settings = termios.tcgetattr(sys.stdin.fileno())
+
+    try:
+        tty.setraw(sys.stdin.fileno())
+        os.set_blocking(master_fd, False)
+
+        ws_url = (
+            client.base_url.replace("http://", "ws://")
+            .replace("https://", "wss://")
+            + f"/workspaces/{args.workspace_id}/pty/{session_id}"
+        )
+
+        extra_headers = (
+            {"Authorization": f"Bearer {client.token}"} if client.token else None
+        )
+
+        async def run():
+            async with websockets.connect(ws_url, additional_headers=extra_headers) as ws:
+                loop = asyncio.get_event_loop()
+
+                async def pty_to_ws():
+                    while True:
+                        await asyncio.sleep(0.01)
+                        r, _, _ = await loop.run_in_executor(
+                            None, select.select, [master_fd], [], [], 0
+                        )
+                        if r:
+                            try:
+                                data = await loop.run_in_executor(
+                                    None, os.read, master_fd, 4096
+                                )
+                                if not data:
+                                    break
+                                await ws.send(data)
+                            except OSError:
+                                break
+
+                async def ws_to_pty():
+                    try:
+                        while True:
+                            data = await ws.recv()
+                            if isinstance(data, bytes):
+                                os.write(master_fd, data)
+                            else:
+                                os.write(master_fd, data.encode())
+                    except (websockets.ConnectionClosed, Exception):  # noqa: S110, BLE001
+                        pass
+
+                await asyncio.gather(pty_to_ws(), ws_to_pty())
+
+        asyncio.run(run())
+    finally:
+        try:
+            os.close(master_fd)
+        except Exception:  # noqa: S110, BLE001
+            pass
+        try:
+            proc.terminate()
+        except Exception:  # noqa: S110, BLE001
+            pass
+        try:
+            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+        except Exception:  # noqa: S110, BLE001
+            pass
+        try:
+            client.pty_stop(args.workspace_id, session_id)
+        except Exception:  # noqa: S110, BLE001
+            pass
 
 
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:

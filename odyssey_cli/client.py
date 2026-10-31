@@ -484,6 +484,24 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- pty (Phase 3, interactive terminal) ---
+    def pty_create(self, workspace_id: str, cwd: str | None = None) -> dict:
+        body: dict[str, Any] = {}
+        if cwd is not None:
+            body["cwd"] = cwd
+        resp = self._request(
+            "POST", f"/workspaces/{workspace_id}/pty", json=body
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def pty_stop(self, workspace_id: str, session_id: str) -> dict:
+        resp = self._request(
+            "DELETE", f"/workspaces/{workspace_id}/pty/{session_id}"
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def process_start(
         self, workspace_id: str, argv: list[str], cwd: str | None = None, port: int | None = None
     ) -> dict:

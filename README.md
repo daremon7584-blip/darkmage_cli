@@ -65,7 +65,7 @@ odyssey payment create [--product standard_30d|credits] [--amount-rub N]  # сс
 odyssey payment list                                                       # список своих платежей
 
 odyssey admin status                          # баланс OpenRouter (только админ)
-odyssey term <workspace_id>                   # интерактивный терминал (заглушка Phase 3)
+odyssey term <workspace_id>                   # интерактивный терминал (PTY, Phase 3)
 
 odyssey git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, нужен бэкенд)
 odyssey git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, нужен бэкенд)
