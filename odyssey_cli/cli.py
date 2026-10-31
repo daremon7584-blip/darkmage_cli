@@ -16,14 +16,31 @@ def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_login(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Войти в систему. Можно передать email и пароль аргументами,
+    или ввести интерактивно (как в Claude Code)."""
     from .config import set_token
 
-    data = client.login(args.email, args.password)
+    email = args.email
+    password = args.password
+
+    if not email:
+        email = input("Email: ").strip()
+    if not email:
+        print("Ошибка: email не может быть пустым.")
+        return
+
+    if not password:
+        password = getpass.getpass("Пароль: ")
+    if not password:
+        print("Ошибка: пароль не может быть пустым.")
+        return
+
+    data = client.login(email, password)
     token = data.get("access_token")
     if token:
         set_token(token)
         client.token = token
-        print(f"Logged in as {args.email}. Token saved.")
+        print(f"✅ Вход выполнен как {email}")
     else:
         print_json(data)
 
@@ -1154,8 +1171,8 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_register)
 
     p = auth_sub.add_parser("login", help="Log in and save token")
-    p.add_argument("--email", required=True)
-    p.add_argument("--password", required=True)
+    p.add_argument("email", nargs="?", default=None, help="Email (asked interactively if omitted)")
+    p.add_argument("password", nargs="?", default=None, help="Password (asked interactively if omitted)")
     p.set_defaults(func=cmd_login)
 
     p = auth_sub.add_parser("logout", help="Remove saved token")
