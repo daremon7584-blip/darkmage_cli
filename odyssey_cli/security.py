@@ -62,13 +62,13 @@ def load_config() -> dict[str, Any]:
     except (OSError, json.JSONDecodeError):
         return {}
 
-    # Расшифровываем токен, если он зашифрован
-    if data.get("token"):
-        try:
-            data["token"] = _decrypt(data["token"])
-        except Exception:  # noqa: BLE001
-            # Если не удалось расшифровать, возможно ключ изменен
-            data["token"] = None
+    # Расшифровываем токены, если они зашифрованы
+    for key in ("token", "runner_token"):
+        if data.get(key):
+            try:
+                data[key] = _decrypt(data[key])
+            except Exception:  # noqa: BLE001
+                data[key] = None
 
     return data
 
@@ -84,6 +84,8 @@ def save_config(config: dict[str, Any]) -> None:
     encrypted = config.copy()
     if encrypted.get("token"):
         encrypted["token"] = _encrypt(encrypted["token"])
+    if encrypted.get("runner_token"):
+        encrypted["runner_token"] = _encrypt(encrypted["runner_token"])
 
     CONFIG_FILE.write_text(json.dumps(encrypted, indent=2), encoding="utf-8")
     os.chmod(CONFIG_FILE, 0o600)

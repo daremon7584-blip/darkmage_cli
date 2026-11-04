@@ -10,6 +10,7 @@ from .security import (
 )
 
 DEFAULT_BASE_URL = "http://localhost:8000"
+DEFAULT_RUNNER_URL = "http://localhost:8090"
 
 
 def get_base_url() -> str:
@@ -24,6 +25,18 @@ def set_base_url(url: str) -> None:
     save_config(config)
 
 
+def get_runner_url() -> str:
+    return os.environ.get("ODYSSEY_RUNNER_URL") or load_config().get(
+        "runner_url", DEFAULT_RUNNER_URL
+    ).rstrip("/")
+
+
+def set_runner_url(url: str) -> None:
+    config = load_config()
+    config["runner_url"] = url.rstrip("/")
+    save_config(config)
+
+
 def get_token() -> str | None:
     return os.environ.get("ODYSSEY_TOKEN") or load_config().get("token")
 
@@ -34,6 +47,19 @@ def set_token(token: str | None) -> None:
         config.pop("token", None)
     else:
         config["token"] = token
+    save_config(config)
+
+
+def get_runner_token() -> str | None:
+    return os.environ.get("ODYSSEY_RUNNER_TOKEN") or load_config().get("runner_token")
+
+
+def set_runner_token(token: str | None) -> None:
+    config = load_config()
+    if token is None:
+        config.pop("runner_token", None)
+    else:
+        config["runner_token"] = token
     save_config(config)
 
 

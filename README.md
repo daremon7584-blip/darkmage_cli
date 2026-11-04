@@ -94,6 +94,18 @@ odyssey git commit <ws> "сообщение" [--branch feature]  # коммит 
 odyssey git push <ws> [--branch main]                 # пуш (Phase 3, бэкенд)
 odyssey git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, бэкенд)
 
+# APK / Godot (выполняются на runner-manager, порт 8090)
+odyssey workspace apk <workspace_id> [--web-dir DIR] [--output FILE.apk] [--app-name NAME] [--app-id ID] [--version-code N]
+                                        # Собрать отладочный Android APK из веб-файлов workspace
+odyssey workspace godot <workspace_id> [--project-dir DIR] [--output-dir DIR]
+                                        # Экспортировать Godot 4 проект в Web-билд
+
+# Конфиг runner-manager
+odyssey config set --runner-url http://localhost:8090   # URL runner-managera
+odyssey config set --runner-token <TOKEN>               # bearer токен runner-managера
+export ODYSSEY_RUNNER_URL=http://localhost:8090         # или через env var
+export ODYSSEY_RUNNER_TOKEN=<TOKEN>
+
 odyssey mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
 odyssey mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 

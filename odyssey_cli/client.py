@@ -9,7 +9,7 @@ from typing import Any
 
 import httpx
 
-from .config import get_base_url, get_token
+from .config import get_base_url, get_runner_token, get_runner_url, get_token
 
 
 class OdysseyError(Exception):
@@ -19,18 +19,25 @@ class OdysseyError(Exception):
 class OdysseyClient:
     def __init__(self, base_url: str | None = None, token: str | None = None):
         self.base_url = (base_url or get_base_url()).rstrip("/")
+        self.runner_url = get_runner_url().rstrip("/")
         self.token = token or get_token()
+        self.runner_token = get_runner_token()
         self._client = httpx.Client(timeout=60.0)
 
-    def _headers(self) -> dict[str, str]:
+    def _headers(self, *, runner: bool = False) -> dict[str, str]:
         headers: dict[str, str] = {"Content-Type": "application/json"}
-        if self.token:
-            headers["Authorization"] = f"Bearer {self.token}"
+        if runner:
+            token = self.runner_token
+        else:
+            token = self.token
+        if token:
+            headers["Authorization"] = f"Bearer {token}"
         return headers
 
-    def _request(self, method: str, path: str, **kwargs: Any) -> httpx.Response:
-        url = f"{self.base_url}{path}"
-        kwargs.setdefault("headers", {}).update(self._headers())
+    def _request(self, method: str, path: str, *, runner: bool = False, **kwargs: Any) -> httpx.Response:
+        base = self.runner_url if runner else self.base_url
+        url = f"{base.rstrip('/')}{path}"
+        kwargs.setdefault("headers", {}).update(self._headers(runner=runner))
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.RequestError as exc:
@@ -569,6 +576,46 @@ class OdysseyClient:
     def process_stop(self, workspace_id: str, process_id: str) -> dict:
         resp = self._request(
             "POST", f"/workspaces/{workspace_id}/processes/{process_id}/stop"
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    # --- APK / Godot (runner-manager, port 8090) ---
+    def workspace_build_apk(
+        self,
+        workspace_id: str,
+        web_dir: str = ".",
+        output: str = "android/app-debug.apk",
+        app_name: str = "",
+        app_id: str | None = None,
+        version_code: int = 1,
+    ) -> dict:
+        """Build a debug Android APK from the workspace's web files via runner-manager."""
+        body: dict[str, Any] = {
+            "web_dir": web_dir,
+            "output": output,
+            "app_name": app_name,
+            "version_code": version_code,
+        }
+        if app_id:
+            body["app_id"] = app_id
+        resp = self._request("POST", f"/v1/workspaces/{workspace_id}/apk", runner=True, json=body)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def workspace_export_godot(
+        self,
+        workspace_id: str,
+        project_dir: str = ".",
+        output_dir: str = "godot-web",
+    ) -> dict:
+        """Export a Godot 4 project to a Web build via runner-manager."""
+        body: dict[str, Any] = {
+            "project_dir": project_dir,
+            "output_dir": output_dir,
+        }
+        resp = self._request(
+            "POST", f"/v1/workspaces/{workspace_id}/godot", runner=True, json=body
         )
         self._raise_for_status(resp)
         return self._json_or_text(resp)

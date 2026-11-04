@@ -395,6 +395,31 @@ def _print_tree(
             print(f"{prefix}{connector}📄 {entry['name']}{size_str}")
 
 
+def cmd_ws_build_apk(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Build a debug Android APK from the workspace's web files."""
+    print_json(
+        client.workspace_build_apk(
+            args.workspace_id,
+            web_dir=args.web_dir,
+            output=args.output,
+            app_name=args.app_name,
+            app_id=args.app_id,
+            version_code=args.version_code,
+        )
+    )
+
+
+def cmd_ws_export_godot(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Export a Godot 4 project to a Web build."""
+    print_json(
+        client.workspace_export_godot(
+            args.workspace_id,
+            project_dir=args.project_dir,
+            output_dir=args.output_dir,
+        )
+    )
+
+
 def cmd_session_create(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.session_create(args.workspace_id, args.title))
 
@@ -750,6 +775,184 @@ def cmd_tui(args: argparse.Namespace, client: OdysseyClient) -> None:
     )
 
 
+
+
+def print_help_repl() -> None:
+    """Показать справку по интерактивному режиму."""
+    print("""
+Доступные команды:
+  auth register --email EMAIL --password PASSWORD  Зарегистрироваться
+  auth login [--email EMAIL] [--password PASSWORD]  Войти в систему
+  auth logout                                       Выйти из системы
+  auth interactive                                  Интерактивный вход
+
+  me                                                Информация о пользователе
+  usage                                             Использование ресурсов
+  memory get                                        Чтение памяти
+  memory put "content"                              Сохранить память
+
+  workspace create --name NAME                      Создать рабочую зону
+  workspace list [--limit N]                        Список рабочих зон
+  workspace get <workspace_id>                      Информация о зоне
+  workspace start <workspace_id>                    Запустить зону
+  workspace stop <workspace_id>                     Остановить зону
+  workspace delete <workspace_id>                   Удалить зону
+  workspace update <workspace_id> [--name NAME] [--approval-mode auto|ask]  Обновить зону
+
+  files list <workspace_id> [path]                  Список файлов
+  files read <workspace_id> <path> [--offset N] [--limit N]  Прочитать файл
+  files edit <workspace_id> <path> "content" [--base-content "..."]  Редактировать файл
+  files search <workspace_id> <query> [path]      Поиск по файлам
+  files download <workspace_id> <remote_path> <local_path>  Скачать файл
+  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл
+  files tree <workspace_id> [path] [--depth N]    Дерево файлов
+
+  session create <workspace_id> [--title TITLE]   Создать сессию
+  session list <workspace_id> [--limit N]         Список сессий
+
+  run create <session_id> --prompt "text" [--model MODEL] [--plan-only] [--thorough] [--image file.png]  Создать задачу
+  run get <run_id>                                Информация о задаче
+  run message <run_id> "text"                     Сообщение в задачу
+  run answer <run_id> <question_id> "answer1" [answer2 ...]  Ответ на вопрос
+  run context <run_id>                            Контекст задачи
+  run revert <run_id>                             Откат задачи
+  run review <run_id>                             Ревью задачи
+  run stop <run_id>                               Остановить задачу
+  run events <run_id> [--last-event-id N] [--pretty]  События задачи
+  run list <workspace_id>                         Список задач зоны
+
+  process start <workspace_id> <cmd> [args...] [--cwd DIR] [--port PORT]  Запустить процесс
+  process output <workspace_id> [process_id]      Вывод процесса
+  process stop <workspace_id> <process_id>        Остановить процесс
+
+  payment create [--product standard_30d|credits] [--amount-rub N]  Создать платеж
+  payment list                                    Список платежей
+
+  admin status                                    Статус сервера
+
+  chat "text" [--system SYSTEM] [--model M] [--temperature T] [--max-tokens N]  Чат
+  health                                          Проверка сервера
+  ready                                           Готовность сервера
+
+  exit / quit / q                                 Выйти из интерактивного режима
+""")
+def cmd_repl(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Интерактивный режим REPL для работы с Odyssey AI."""
+    import readline
+    import shlex
+
+    print("🚀 Odyssey CLI — Интерактивный режим (REPL)")
+    print("Введите команду или 'help' для справки, 'exit' или 'quit' для выхода.\n")
+
+    while True:
+        try:
+            user_input = input("odyssey> ").strip()
+        except (EOFError, KeyboardInterrupt):
+            print("\n👋 До свидания!")
+            return
+
+        if not user_input.strip():
+            continue
+
+        if user_input.lower() in ("exit", "quit", "q"):
+            print("👋 До свидания!")
+            return
+
+        if user_input.lower() in ("help", "h"):
+            print_help_repl()
+            continue
+
+        parts = shlex.split(user_input)
+        command = parts[0]
+        args_list = parts[1:] if len(parts) > 1 else []
+
+        class Args:
+            pass
+
+        args_obj = Args()
+        args_obj.func = None
+
+        sub_parser = build_parser()
+        try:
+            sub_args = sub_parser.parse_args(parts)
+            func = sub_args.func
+            if func:
+                func(sub_args, client)
+        except SystemExit:
+            pass
+        except OdysseyError as exc:
+            print_error(str(exc))
+
+
+def print_help_repl() -> None:
+    """Показать справку по интерактивному режиму."""
+    print("""
+Доступные команды:
+  auth register --email EMAIL --password PASSWORD   Зарегистрироваться
+  auth login [--email EMAIL] [--password PASSWORD]   Войти в систему
+  auth logout                                        Выйти из системы
+  auth interactive                                   Интерактивный вход
+
+  me                                               Информация о пользователе
+  usage                                            Использование ресурсов
+  memory get                                       Чтение памяти
+  memory put "content"                             Сохранить память
+
+  workspace create --name NAME                     Создать рабочую зону
+  workspace list [--limit N]                       Список рабочих зон
+  workspace get <workspace_id>                     Информация о workspace
+  workspace start <workspace_id>                   Запустить зону
+  workspace stop <workspace_id>                    Остановить зону
+  workspace delete <workspace_id>                  Удалить зону
+  workspace update <workspace_id> [--name NAME] [--approval-mode auto|ask]  Обновить зону
+
+  files list <workspace_id> [path]                 Список файлов
+  files read <workspace_id> <path> [--offset N] [--limit N]  Прочитать файл
+  files edit <workspace_id> <path> --content "..." [--base-content "..."]  Редактировать файл
+  files search <workspace_id> <query> [path]     Поиск по файлам
+  files download <workspace_id> <remote_path> <local_path>  Скачать файл
+  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл
+  files tree <workspace_id> [path] [--depth N]   Дерево файлов
+
+  session create <workspace_id> [--title TITLE]   Создать сессию
+  session list <workspace_id> [--limit N]         Список сессий
+
+  run create <session_id> --prompt "text" [--model MODEL] [--plan-only] [--thorough] [--image file.png]  Создать задачу
+  run get <run_id>                                Информация о задаче
+  run message <run_id> "text"                     Сообщение в задачу
+  run answer <run_id> <question_id> "answer1" [answer2 ...]  Ответ на вопрос
+  run context <run_id>                            Контекст задачи
+  run revert <run_id>                             Откат задачи
+  run review <run_id>                             Ревью задачи
+  run stop <run_id>                               Остановить задачу
+  run events <run_id> [--last-event-id N] [--pretty]  Поток событий задачи
+  run list <workspace_id>                         Список задачworkspace
+
+  process start <workspace_id> <cmd> [args...] [--cwd DIR] [--port PORT]  Запустить процесс
+  process output <workspace_id> [process_id]      Вывод процесса
+  process stop <workspace_id> <process_id>        Остановить процесс
+
+  payment create [--product standard_30d|credits] [--amount-rub N]  Создать платеж
+  payment list                                    Список платежей
+
+  admin status                                    Статус сервера
+
+  chat "text" [--system SYSTEM] [--model M] [--temperature T] [--max-tokens N]  Чат
+  health                                          Проверка сервера
+  ready                                           Готовность сервера
+
+  config show [--json]                            Показать конфиг
+  config set --url URL [--token TOKEN]            Установить конфиг
+  config export <file>                            Экспорт конфига
+  config import <file>                            Импорт конфига
+
+  completion <bash|zsh|fish>                      Генерация скриптов автодополнения
+  history [N]                                       История команд (вернуть по номеру)
+
+  exit / quit / q                                   Выйти из интерактивного режима
+""")
+
+
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
     from .config import load_config
     from .security import CONFIG_FILE
@@ -769,14 +972,20 @@ def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_config_set(args: argparse.Namespace, client: OdysseyClient) -> None:
-    from .config import load_config, set_base_url
+    from .config import load_config, set_base_url, set_runner_token, set_runner_url
 
     changed = False
     if args.url is not None:
         set_base_url(args.url)
         changed = True
+    if args.runner_url is not None:
+        set_runner_url(args.runner_url)
+        changed = True
+    if args.runner_token is not None:
+        set_runner_token(args.runner_token)
+        changed = True
     if not changed:
-        print("Нечего менять: укажите --url")
+        print("Нечего менять: укажите --url, --runner-url или --runner-token")
         return
     print("Конфиг обновлён.")
     if args.verbose:
@@ -1142,6 +1351,12 @@ def build_parser() -> argparse.ArgumentParser:
         "--url", default=None, help="API base URL (default: ODYSSEY_API_URL or http://localhost:8000)"
     )
     parser.add_argument(
+        "--runner-url", default=None, help="Runner-manager URL (default: ODYSSEY_RUNNER_URL or http://localhost:8090)"
+    )
+    parser.add_argument(
+        "--runner-token", default=None, help="Runner-manager bearer token (default: ODYSSEY_RUNNER_TOKEN)"
+    )
+    parser.add_argument(
         "--verbose",
         action="store_true",
         default=False,
@@ -1275,6 +1490,22 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--depth", type=int, default=10, help="Max depth (default: 10)")
     p.set_defaults(func=cmd_ws_tree)
 
+    # APK / Godot (runner-manager)
+    p = ws_sub.add_parser("apk", help="Build a debug Android APK from workspace web files")
+    p.add_argument("workspace_id")
+    p.add_argument("--web-dir", default=".", help="Directory with web files inside workspace (default: .)")
+    p.add_argument("--output", default="android/app-debug.apk", help="Output .apk path inside workspace")
+    p.add_argument("--app-name", default="", help="Application name (max 30 chars)")
+    p.add_argument("--app-id", default=None, help="Application ID (default: app.odyssey.p<workspace_id_hex>)")
+    p.add_argument("--version-code", type=int, default=1, help="Version code (default: 1)")
+    p.set_defaults(func=cmd_ws_build_apk)
+
+    p = ws_sub.add_parser("godot", help="Export a Godot 4 project to a Web build")
+    p.add_argument("workspace_id")
+    p.add_argument("--project-dir", default=".", help="Project directory inside workspace (default: .)")
+    p.add_argument("--output-dir", default="godot-web", help="Output directory inside workspace (default: godot-web)")
+    p.set_defaults(func=cmd_ws_export_godot)
+
     # sessions
     sess = sub.add_parser("session", help="Sessions")
     sess_sub = sess.add_subparsers(dest="session_command", required=True)
@@ -1288,6 +1519,10 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("workspace_id")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_session_list)
+
+    # repl
+    repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
+    repl.set_defaults(func=cmd_repl)
 
     # runs
     runs = sub.add_parser("run", help="Runs")
@@ -1423,6 +1658,8 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = config_sub.add_parser("set", help="Установить параметры конфига")
     p.add_argument("--url", default=None, help="API base URL")
+    p.add_argument("--runner-url", default=None, help="Runner-manager URL")
+    p.add_argument("--runner-token", default=None, help="Runner-manager bearer token")
     p.add_argument(
         "--verbose", action="store_true", default=False, help="Показать обновлённый конфиг"
     )
@@ -1514,6 +1751,12 @@ def build_parser() -> argparse.ArgumentParser:
     )
     history.set_defaults(func=cmd_history)
 
+    repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
+    repl.set_defaults(func=cmd_repl)
+
+    repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
+    repl.set_defaults(func=cmd_repl)
+
     parallel = sub.add_parser(
         "parallel", help="Запуск нескольких команд параллельно"
     )
@@ -1527,11 +1770,37 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
+def _mask_password(command: str) -> str:
+    """Hide passwords in saved history so they are not stored in plain text."""
+    parts = command.split()
+    masked: list[str] = []
+    skip_next = False
+    for index, part in enumerate(parts):
+        if skip_next:
+            masked.append("***")
+            skip_next = False
+            continue
+        if part in ("--password", "-p"):
+            masked.append(part)
+            skip_next = True
+            continue
+        masked.append(part)
+    # `odyssey login <email> <password>`: mask the last positional argument.
+    if len(parts) >= 3 and parts[0] == "login":
+        masked[-1] = "***"
+    # `odyssey auth register ... --password <value>` is already masked above via --password.
+    return " ".join(masked)
+
+
 def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
     client = OdysseyClient(base_url=args.url)
+    if args.runner_url:
+        client.runner_url = args.runner_url.rstrip("/")
+    if args.runner_token:
+        client.runner_token = args.runner_token
     try:
         func = args.func
     except AttributeError:
@@ -1540,7 +1809,7 @@ def main(argv: list[str] | None = None) -> int:
 
     try:
         func(args, client)
-        # Record command in history
+        # Record command in history (passwords are masked, never stored in plain text).
         import json
 
         from .security import CONFIG_DIR
@@ -1551,7 +1820,12 @@ def main(argv: list[str] | None = None) -> int:
                 history = json.load(f)
         except (OSError, json.JSONDecodeError):
             history = []
-        history.append({"command": " ".join(sys.argv[1:]), "timestamp": str(__import__("datetime").datetime.now())})
+        history.append(
+            {
+                "command": _mask_password(" ".join(sys.argv[1:])),
+                "timestamp": str(__import__("datetime").datetime.now()),
+            }
+        )
         # Keep only last 100 entries
         history = history[-100:]
         with open(history_file, "w", encoding="utf-8") as f:
