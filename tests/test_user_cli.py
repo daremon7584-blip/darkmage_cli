@@ -152,6 +152,8 @@ def test_client_methods():
         "me", "usage", "memory_get", "memory_put",
         "workspace_create", "workspace_list", "workspace_get",
         "workspace_update", "workspace_start", "workspace_stop", "workspace_delete",
+        "workspace_blender", "workspace_export_godot", "workspace_godot_tests",
+        "workspace_tiled_import", "workspace_ldtk_import",
         "workspace_files", "workspace_file_content", "workspace_file_edit",
         "workspace_file_download", "workspace_file_upload",
         "workspace_search",

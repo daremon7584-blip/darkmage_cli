@@ -620,6 +620,84 @@ class OdysseyClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def workspace_blender(
+        self,
+        workspace_id: str,
+        blend_path: str,
+        output: str,
+        preview: bool = False,
+        metadata: bool = True,
+    ) -> dict:
+        """Convert a .blend file to .glb for Godot via runner-manager."""
+        body: dict[str, Any] = {
+            "blend_path": blend_path,
+            "output": output,
+            "preview": preview,
+            "metadata": metadata,
+        }
+        resp = self._request(
+            "POST",
+            f"/v1/workspaces/{workspace_id}/blender",
+            runner=True,
+            json=body,
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def workspace_godot_tests(
+        self,
+        workspace_id: str,
+        test_dir: str = "res://tests",
+        test_suffix: str = "_test.gd",
+    ) -> dict:
+        """Run Godot Unit Test (GUT) tests headless via runner-manager."""
+        body: dict[str, Any] = {
+            "test_dir": test_dir,
+            "test_suffix": test_suffix,
+        }
+        resp = self._request(
+            "POST",
+            f"/v1/workspaces/{workspace_id}/godot-tests",
+            runner=True,
+            json=body,
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def workspace_tiled_import(
+        self, workspace_id: str, tmx_path: str, output: str
+    ) -> dict:
+        """Import a Tiled .tmx map into a Godot .tscn scene via runner-manager."""
+        body: dict[str, Any] = {
+            "tmx_path": tmx_path,
+            "output": output,
+        }
+        resp = self._request(
+            "POST",
+            f"/v1/workspaces/{workspace_id}/tiled-import",
+            runner=True,
+            json=body,
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def workspace_ldtk_import(
+        self, workspace_id: str, ldtk_path: str, output: str
+    ) -> dict:
+        """Import an LDtk .ldtk project into a Godot .tscn scene via runner-manager."""
+        body: dict[str, Any] = {
+            "ldtk_path": ldtk_path,
+            "output": output,
+        }
+        resp = self._request(
+            "POST",
+            f"/v1/workspaces/{workspace_id}/ldtk-import",
+            runner=True,
+            json=body,
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def close(self) -> None:
         self._client.close()
 

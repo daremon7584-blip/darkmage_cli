@@ -420,6 +420,52 @@ def cmd_ws_export_godot(args: argparse.Namespace, client: OdysseyClient) -> None
     )
 
 
+def cmd_ws_blender(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Convert a .blend file to .glb for Godot via runner-manager."""
+    print_json(
+        client.workspace_blender(
+            args.workspace_id,
+            blend_path=args.blend_path,
+            output=args.output,
+            preview=args.preview,
+            metadata=not args.no_metadata,
+        )
+    )
+
+
+def cmd_ws_godot_tests(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Run Godot Unit Test (GUT) tests headless via runner-manager."""
+    print_json(
+        client.workspace_godot_tests(
+            args.workspace_id,
+            test_dir=args.test_dir,
+            test_suffix=args.test_suffix,
+        )
+    )
+
+
+def cmd_ws_tiled_import(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Import a Tiled .tmx map into a Godot .tscn scene via runner-manager."""
+    print_json(
+        client.workspace_tiled_import(
+            args.workspace_id,
+            tmx_path=args.tmx_path,
+            output=args.output,
+        )
+    )
+
+
+def cmd_ws_ldtk_import(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Import an LDtk .ldtk project into a Godot .tscn scene via runner-manager."""
+    print_json(
+        client.workspace_ldtk_import(
+            args.workspace_id,
+            ldtk_path=args.ldtk_path,
+            output=args.output,
+        )
+    )
+
+
 def cmd_session_create(args: argparse.Namespace, client: OdysseyClient) -> None:
     print_json(client.session_create(args.workspace_id, args.title))
 
@@ -884,75 +930,6 @@ def cmd_repl(args: argparse.Namespace, client: OdysseyClient) -> None:
             print_error(str(exc))
 
 
-def print_help_repl() -> None:
-    """Показать справку по интерактивному режиму."""
-    print("""
-Доступные команды:
-  auth register --email EMAIL --password PASSWORD   Зарегистрироваться
-  auth login [--email EMAIL] [--password PASSWORD]   Войти в систему
-  auth logout                                        Выйти из системы
-  auth interactive                                   Интерактивный вход
-
-  me                                               Информация о пользователе
-  usage                                            Использование ресурсов
-  memory get                                       Чтение памяти
-  memory put "content"                             Сохранить память
-
-  workspace create --name NAME                     Создать рабочую зону
-  workspace list [--limit N]                       Список рабочих зон
-  workspace get <workspace_id>                     Информация о workspace
-  workspace start <workspace_id>                   Запустить зону
-  workspace stop <workspace_id>                    Остановить зону
-  workspace delete <workspace_id>                  Удалить зону
-  workspace update <workspace_id> [--name NAME] [--approval-mode auto|ask]  Обновить зону
-
-  files list <workspace_id> [path]                 Список файлов
-  files read <workspace_id> <path> [--offset N] [--limit N]  Прочитать файл
-  files edit <workspace_id> <path> --content "..." [--base-content "..."]  Редактировать файл
-  files search <workspace_id> <query> [path]     Поиск по файлам
-  files download <workspace_id> <remote_path> <local_path>  Скачать файл
-  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл
-  files tree <workspace_id> [path] [--depth N]   Дерево файлов
-
-  session create <workspace_id> [--title TITLE]   Создать сессию
-  session list <workspace_id> [--limit N]         Список сессий
-
-  run create <session_id> --prompt "text" [--model MODEL] [--plan-only] [--thorough] [--image file.png]  Создать задачу
-  run get <run_id>                                Информация о задаче
-  run message <run_id> "text"                     Сообщение в задачу
-  run answer <run_id> <question_id> "answer1" [answer2 ...]  Ответ на вопрос
-  run context <run_id>                            Контекст задачи
-  run revert <run_id>                             Откат задачи
-  run review <run_id>                             Ревью задачи
-  run stop <run_id>                               Остановить задачу
-  run events <run_id> [--last-event-id N] [--pretty]  Поток событий задачи
-  run list <workspace_id>                         Список задачworkspace
-
-  process start <workspace_id> <cmd> [args...] [--cwd DIR] [--port PORT]  Запустить процесс
-  process output <workspace_id> [process_id]      Вывод процесса
-  process stop <workspace_id> <process_id>        Остановить процесс
-
-  payment create [--product standard_30d|credits] [--amount-rub N]  Создать платеж
-  payment list                                    Список платежей
-
-  admin status                                    Статус сервера
-
-  chat "text" [--system SYSTEM] [--model M] [--temperature T] [--max-tokens N]  Чат
-  health                                          Проверка сервера
-  ready                                           Готовность сервера
-
-  config show [--json]                            Показать конфиг
-  config set --url URL [--token TOKEN]            Установить конфиг
-  config export <file>                            Экспорт конфига
-  config import <file>                            Импорт конфига
-
-  completion <bash|zsh|fish>                      Генерация скриптов автодополнения
-  history [N]                                       История команд (вернуть по номеру)
-
-  exit / quit / q                                   Выйти из интерактивного режима
-""")
-
-
 def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
     from .config import load_config
     from .security import CONFIG_FILE
@@ -972,23 +949,26 @@ def cmd_config_show(args: argparse.Namespace, client: OdysseyClient) -> None:
 
 
 def cmd_config_set(args: argparse.Namespace, client: OdysseyClient) -> None:
-    from .config import load_config, set_base_url, set_runner_token, set_runner_url
+    from .config import load_config, set_base_url, set_runner_token, set_runner_url, set_token
 
     changed = False
-    if args.url is not None:
+    if getattr(args, "url", None) is not None:
         set_base_url(args.url)
         changed = True
-    if args.runner_url is not None:
+    if getattr(args, "token", None) is not None:
+        set_token(args.token)
+        changed = True
+    if getattr(args, "runner_url", None) is not None:
         set_runner_url(args.runner_url)
         changed = True
-    if args.runner_token is not None:
+    if getattr(args, "runner_token", None) is not None:
         set_runner_token(args.runner_token)
         changed = True
     if not changed:
-        print("Нечего менять: укажите --url, --runner-url или --runner-token")
+        print("Нечего менять: укажите --url, --token, --runner-url или --runner-token")
         return
     print("Конфиг обновлён.")
-    if args.verbose:
+    if getattr(args, "verbose", False):
         print_json(load_config())
 
 
@@ -1506,6 +1486,38 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--output-dir", default="godot-web", help="Output directory inside workspace (default: godot-web)")
     p.set_defaults(func=cmd_ws_export_godot)
 
+    p = ws_sub.add_parser("blender", help="Convert a .blend file to .glb for Godot")
+    p.add_argument("workspace_id")
+    p.add_argument("blend_path", help="Path to .blend file inside workspace")
+    p.add_argument("output", help="Output .glb path inside workspace")
+    p.add_argument(
+        "--preview", action="store_true", default=False, help="Also render a PNG preview"
+    )
+    p.add_argument(
+        "--no-metadata", action="store_true", default=False, help="Skip metadata extraction"
+    )
+    p.set_defaults(func=cmd_ws_blender)
+
+    p = ws_sub.add_parser("godot-tests", help="Run Godot Unit Test (GUT) tests headless")
+    p.add_argument("workspace_id")
+    p.add_argument("--test-dir", default="res://tests", help="Test directory (default: res://tests)")
+    p.add_argument(
+        "--test-suffix", default="_test.gd", help="Test file suffix (default: _test.gd)"
+    )
+    p.set_defaults(func=cmd_ws_godot_tests)
+
+    p = ws_sub.add_parser("tiled-import", help="Import a Tiled .tmx map to Godot .tscn")
+    p.add_argument("workspace_id")
+    p.add_argument("tmx_path", help="Path to .tmx file inside workspace")
+    p.add_argument("output", help="Output .tscn path inside workspace")
+    p.set_defaults(func=cmd_ws_tiled_import)
+
+    p = ws_sub.add_parser("ldtk-import", help="Import an LDtk .ldtk project to Godot .tscn")
+    p.add_argument("workspace_id")
+    p.add_argument("ldtk_path", help="Path to .ldtk file inside workspace")
+    p.add_argument("output", help="Output .tscn path inside workspace")
+    p.set_defaults(func=cmd_ws_ldtk_import)
+
     # sessions
     sess = sub.add_parser("session", help="Sessions")
     sess_sub = sess.add_subparsers(dest="session_command", required=True)
@@ -1658,6 +1670,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = config_sub.add_parser("set", help="Установить параметры конфига")
     p.add_argument("--url", default=None, help="API base URL")
+    p.add_argument("--token", default=None, help="Bearer auth token (security: prefer ODYSSEY_TOKEN env var)")
     p.add_argument("--runner-url", default=None, help="Runner-manager URL")
     p.add_argument("--runner-token", default=None, help="Runner-manager bearer token")
     p.add_argument(
@@ -1732,7 +1745,13 @@ def build_parser() -> argparse.ArgumentParser:
     # health
     sub.add_parser("health", help="Liveness").set_defaults(func=cmd_health)
     sub.add_parser("ready", help="Readiness").set_defaults(func=cmd_ready)
-    sub.add_parser("doctor", help="Проверка окружения и подключения").set_defaults(func=cmd_doctor)
+
+    doctor = sub.add_parser("doctor", help="Проверка окружения и подключения")
+    doctor.add_argument(
+        "--url", default=None, help="API base URL (overrides config and env)"
+    )
+    doctor.set_defaults(func=cmd_doctor)
+
     sub.add_parser("login", help="Войти в систему (интерактивно)").set_defaults(func=cmd_login_alias)
     sub.add_parser("start", help="Запустить интерактивный сеанс (как в Claude Code)").set_defaults(func=cmd_start)
     completion = sub.add_parser("completion", help="Генерация скриптов автодополнения для shell")
@@ -1750,12 +1769,6 @@ def build_parser() -> argparse.ArgumentParser:
         "number", nargs="?", type=int, default=None, help="Номер команды для повтора"
     )
     history.set_defaults(func=cmd_history)
-
-    repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
-    repl.set_defaults(func=cmd_repl)
-
-    repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
-    repl.set_defaults(func=cmd_repl)
 
     parallel = sub.add_parser(
         "parallel", help="Запуск нескольких команд параллельно"
