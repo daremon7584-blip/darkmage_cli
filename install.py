@@ -40,7 +40,20 @@ def detect_python() -> str:
 def install_python_deps(python_cmd: str) -> None:
     """Устанавливает Python зависимости."""
     print("▶ Установка Python зависимостей...")
-    run(f"{python_cmd} -m pip install httpx cryptography textual websockets pydantic-settings")
+    run(f"{python_cmd} -m pip install httpx textual websockets pydantic-settings")
+
+    # cryptography нужен для шифрования токена в конфиге.
+    # В Termux с Python 3.14 пред собранное wheel может не совпадать с ABI
+    # (символ PyBaseObject_Type отсутствует). Пробуем обычное установление,
+    # а если не сработает — пересобираем из исходников.
+    try:
+        subprocess.run(
+            [python_cmd, "-c", "from cryptography.fernet import Fernet"],
+            capture_output=True, check=True,
+        )
+    except subprocess.CalledProcessError:
+        print("▶ Пересборка cryptography из исходников (для совместимости с Python)...")
+        run(f"{python_cmd} -m pip install --force-reinstall --no-binary :all: cryptography")
 
 
 def clone_repo() -> Path:

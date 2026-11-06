@@ -58,9 +58,21 @@ install_python_pkgs() {
         echo "❌ Python не найден. Установите Python 3.10+ и запустите снова."
         exit 1
     fi
-    "$PY" -m pip install --quiet httpx cryptography textual websockets pydantic-settings || \
-        pip install --quiet httpx cryptography textual websockets pydantic-settings || \
-        "$PY" -m pip install httpx cryptography textual websockets pydantic-settings
+
+    # Устанавливаем зависимости
+    "$PY" -m pip install --quiet httpx textual websockets pydantic-settings || \
+        pip install --quiet httpx textual websockets pydantic-settings || \
+        "$PY" -m pip install httpx textual websockets pydantic-settings
+
+    # cryptography нужен для шифрования токена в конфиге.
+    # В Termux с Python 3.14 пред собранное wheel может не совпадать с ABI
+    # (символ PyBaseObject_Type отсутствует). Пробуем обычное установление,
+    # а если не сработает — пересобираем из исходников.
+    if ! "$PY" -c "from cryptography.fernet import Fernet" 2>/dev/null; then
+        echo "▶ Пересборка cryptography из исходников (для совместимости с Python $("$PY" --version 2>&1 | cut -d' ' -f2))..."
+        "$PY" -m pip install --force-reinstall --no-binary :all: cryptography || \
+            pip install --force-reinstall --no-binary :all: cryptography
+    fi
 }
 
 case "$OS" in
