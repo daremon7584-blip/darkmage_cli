@@ -4,8 +4,6 @@
 # =============================================================================
 # Использование:
 #   curl -sSL https://raw.githubusercontent.com/daremon7584-blip/darkmage_cli/main/install-darkmage-termux.sh | bash
-# или:
-#   pkg install -y curl && curl -sSL ... | bash
 # =============================================================================
 
 set -e
@@ -15,38 +13,42 @@ echo "║  🧙‍♂️  Darkmage AI CLI — установка для Termux  
 echo "╚════════════════════════════════════════════════════════════════════╝"
 echo ""
 
-# 1. Обновляем пакеты
+# 1. Исправляем возможные ошибки dpkg (вопрос про bash.bashrc)
+echo "▶ Проверка состояния пакетов..."
+echo "N" | dpkg --configure -a 2>/dev/null || true
+apt-get install -y --fix-broken 2>/dev/null || true
+
+# 2. Обновляем пакеты
 echo "▶ Обновление пакетов Termux..."
 pkg update -y
 pkg upgrade -y
 
-# 2. Устанавливаем зависимости
+# 3. Устанавливаем зависимости
 echo "▶ Установка Python, git и инструментов сборки..."
-pkg install -y python git build-essential rust cargo libffi openssl curl
+pkg install -y python git build-essential rust libffi openssl curl
 
-# 3. Обновляем pip
+# 4. Обновляем pip
 echo "▶ Обновление pip..."
 pip install --upgrade pip
 
-# 4. Устанавливаем Python зависимости Darkmage CLI
+# 5. Устанавливаем Python зависимости Darkmage CLI
 echo "▶ Установка Python зависимостей..."
 pip install httpx cryptography textual websockets pydantic-settings
 
-# 5. Клонируем репозиторий
+# 6. Клонируем репозиторий
 echo "▶ Клонирование darkmage_cli..."
 cd ~
 rm -rf darkmage_cli
 git clone https://github.com/daremon7584-blip/darkmage_cli.git
 cd darkmage_cli
 
-# 6. Устанавливаем CLI как команду darkmage
+# 7. Устанавливаем CLI как команду darkmage
 echo "▶ Установка команды darkmage..."
 pip install -e .
 
-# 7. Настраиваем переменные окружения
+# 8. Настраиваем переменные окружения
 echo "▶ Настройка переменных окружения..."
 
-# Добавляем в .bashrc только если ещё нет
 if ! grep -q "DARKMAGE_API_URL" ~/.bashrc 2>/dev/null; then
     echo '' >> ~/.bashrc
     echo '# Darkmage AI CLI configuration' >> ~/.bashrc
@@ -58,7 +60,7 @@ fi
 
 source ~/.bashrc
 
-# 8. Готово
+# 9. Готово
 echo ""
 echo "╔════════════════════════════════════════════════════════════════════╗"
 echo "║  ✅ Установка завершена!                                            ║"
