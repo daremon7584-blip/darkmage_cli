@@ -12,6 +12,8 @@ import os
 import subprocess
 import sys
 from pathlib import Path
+import urllib.request
+import urllib.error
 
 
 def run(cmd: str, **kwargs) -> None:
@@ -112,6 +114,24 @@ def main() -> None:
     print("║  🧙‍♂️  Darkmage AI CLI — установка                                ║")
     print(f"║  Сервер: {server:<58}║")
     print("╚════════════════════════════════════════════════════════════════════╝")
+    print()
+
+    # Health-check сервера
+    print("▶ Проверка сервера", server, ":8000...")
+    try:
+        req = urllib.request.Request(f"http://{server}:8000/health")
+        with urllib.request.urlopen(req, timeout=10) as resp:
+            if resp.status == 200:
+                print("   ✅ Сервер отвечает")
+            else:
+                print(f"   ⚠️  Сервер вернул статус {resp.status}")
+                print("      Установка продолжится, но проверьте, что сервер запущен.")
+    except urllib.error.URLError as e:
+        print(f"   ⚠️  Сервер не отвечает: {e}")
+        print("      Установка продолжится, но проверьте, что сервер запущен.")
+    except Exception as e:
+        print(f"   ⚠️  Не удалось проверить сервер: {e}")
+        print("      Установка продолжится.")
     print()
 
     python_cmd = detect_python()

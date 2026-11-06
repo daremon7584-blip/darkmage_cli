@@ -29,6 +29,20 @@ echo "║  Сервер: $SERVER                                                
 echo "╚════════════════════════════════════════════════════════════════════╝"
 echo ""
 
+# --- Health-check сервера ---
+echo "▶ Проверка сервера $SERVER:8000..."
+if command -v curl >/dev/null 2>&1; then
+    if curl -sSf --max-time 10 "http://$SERVER:8000/health" >/dev/null 2>&1; then
+        echo "   ✅ Сервер отвечает"
+    else
+        echo "   ⚠️  Сервер не отвечает на http://$SERVER:8000/health"
+        echo "      Установка продолжится, но проверьте, что сервер запущен."
+    fi
+else
+    echo "   ⚠️  curl не найден, пропускаем проверку сервера."
+fi
+echo ""
+
 # --- Определяем ОС и пакетный менеджер ---
 OS="$(uname -s)"
 ARCH="$(uname -m)"
