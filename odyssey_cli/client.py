@@ -219,20 +219,61 @@ class OdysseyClient:
             "size_bytes": data.get("size_bytes", 0),
         }
 
+    def workspace_file_put(self, workspace_id: str, path: str, content: str) -> dict:
+        """Directly write (overwrite) a file in the workspace without approval flow."""
+        resp = self._request(
+            "PUT",
+            f"/workspaces/{workspace_id}/files/content",
+            params={"path": path},
+            json={"content": content},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def workspace_file_delete(self, workspace_id: str, path: str) -> dict:
+        """Directly delete a file from the workspace without approval flow."""
+        resp = self._request(
+            "DELETE",
+            f"/workspaces/{workspace_id}/files/content",
+            params={"path": path},
+        )
+        self._raise_for_status(resp)
+        return {"workspace_id": workspace_id, "path": path, "status": "deleted"}
+
     def workspace_file_upload(self, local_path: str, workspace_id: str, remote_path: str) -> dict:
-        """Upload a local file to workspace."""
+        """Upload a local file to workspace (direct write, no approval flow)."""
         try:
             with open(local_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except OSError as exc:
             raise OdysseyError(f"Cannot read {local_path}: {exc}")
-        # For new file creation, base_content is empty
+        return self.workspace_file_put(workspace_id, remote_path, content)
+
+    def workspace_file_upload_binary(self, local_path: str, workspace_id: str, remote_path: str) -> dict:
+        """Upload a binary file to workspace (base64 encoded via edit flow)."""
+        try:
+            data = Path(local_path).read_bytes()
+        except OSError as exc:
+            raise OdysseyError(f"Cannot read {local_path}: {exc}")
+        if len(data) > 1_500_000:
+            raise OdysseyError(f"File too large (>1.5 MB): {local_path}")
+        import base64
         return self.workspace_file_edit(
             workspace_id=workspace_id,
             path=remote_path,
-            content=content,
+            content=base64.b64encode(data).decode("ascii"),
             base_content="",
         )
+
+    def workspace_export_zip(self, workspace_id: str) -> dict:
+        """Download the entire workspace as a ZIP archive."""
+        # This is a streaming endpoint; return metadata so caller can stream.
+        resp = self._request(
+            "GET",
+            f"/workspaces/{workspace_id}/export.zip",
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
 
     def workspace_search(
         self, workspace_id: str, query: str, path: str = "."

@@ -14,6 +14,7 @@ import os
 import subprocess
 import sys
 import tempfile
+from pathlib import Path
 
 from odyssey_cli.cli import _color_status, _format_event
 from odyssey_cli.client import OdysseyClient
@@ -156,6 +157,7 @@ def test_client_methods():
         "workspace_tiled_import", "workspace_ldtk_import",
         "workspace_files", "workspace_file_content", "workspace_file_edit",
         "workspace_file_download", "workspace_file_upload",
+        "workspace_file_put", "workspace_file_delete",
         "workspace_search",
         "session_create", "session_list",
         "run_create", "run_get", "run_message", "run_answer", "run_context",
@@ -186,6 +188,65 @@ def test_exit_codes():
     check("--help exits 0", rc == 0, f"rc={rc}")
 
 
+def test_sync_module():
+    """Test sync module functions."""
+    print("\n🔄 Тест 8: Синхронизация файлов")
+
+    from odyssey_cli.sync import (
+        load_ignore_patterns,
+        should_ignore,
+        sha256_of_file,
+        walk_local_files,
+        DEFAULT_IGNORE_PATTERNS,
+    )
+
+    # Ignore patterns
+    check("DEFAULT_IGNORE_PATTERNS non-empty", len(DEFAULT_IGNORE_PATTERNS) > 0)
+    check(".git ignored", should_ignore(".git", DEFAULT_IGNORE_PATTERNS))
+    check("__pycache__ ignored", should_ignore("__pycache__", DEFAULT_IGNORE_PATTERNS))
+    check("node_modules ignored", should_ignore("node_modules", DEFAULT_IGNORE_PATTERNS))
+    check("main.py not ignored", not should_ignore("main.py", DEFAULT_IGNORE_PATTERNS))
+    check("src/main.gd not ignored", not should_ignore("src/main.gd", DEFAULT_IGNORE_PATTERNS))
+
+    # SHA-256
+    import tempfile, os
+    with tempfile.NamedTemporaryFile(mode="w", suffix=".txt", delete=False) as f:
+        f.write("hello world")
+        tmp_path = f.name
+    try:
+        checksum = sha256_of_file(Path(tmp_path))
+        check("SHA-256 is 64 hex chars", len(checksum) == 64 and all(c in "0123456789abcdef" for c in checksum))
+    finally:
+        os.unlink(tmp_path)
+
+    # Walk local files
+    with tempfile.TemporaryDirectory() as tmpdir:
+        td = Path(tmpdir)
+        (td / "a.txt").write_text("aaa")
+        (td / "b.py").write_text("bbb")
+        (td / "sub").mkdir()
+        (td / "sub" / "c.txt").write_text("ccc")
+        (td / ".git").mkdir()
+        (td / ".git" / "config").write_text("git config")
+        (td / "__pycache__").mkdir()
+        (td / "__pycache__" / "a.pyc").write_text("pyc")
+
+        files = walk_local_files(td, DEFAULT_IGNORE_PATTERNS)
+        rel_paths = {rel for _, rel in files}
+        check("a.txt found", "a.txt" in rel_paths)
+        check("b.py found", "b.py" in rel_paths)
+        check("sub/c.txt found", "sub/c.txt" in rel_paths)
+        check(".git/config ignored", ".git/config" not in rel_paths)
+        check("__pycache__/a.pyc ignored", "__pycache__/a.pyc" not in rel_paths)
+
+    # SyncState dataclass
+    from odyssey_cli.sync import SyncState, FileEntry
+    state = SyncState()
+    check("SyncState empty", len(state.local_files) == 0 and len(state.workspace_files) == 0)
+    fe = FileEntry(path="test.txt", size_bytes=10, checksum="abc123")
+    check("FileEntry fields", fe.path == "test.txt" and fe.size_bytes == 10 and fe.checksum == "abc123")
+
+
 if __name__ == "__main__":
     print("=" * 60)
     print("🧪 Пользовательские тесты Odyssey CLI")
@@ -197,6 +258,7 @@ if __name__ == "__main__":
     test_completion()
     test_run_events_parsing()
     test_client_methods()
+    test_sync_module()
     test_exit_codes()
 
     print("\n" + "=" * 60)

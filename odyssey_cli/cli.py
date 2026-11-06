@@ -3,11 +3,14 @@ from __future__ import annotations
 import argparse
 import getpass
 import json
+import os
 import sys
+from pathlib import Path
 from typing import Any, cast
 
 from .client import OdysseyClient, OdysseyError, print_error, print_json
 from .config import get_token, load_config, save_config
+from . import sync as sync_mod
 
 
 def cmd_register(args: argparse.Namespace, client: OdysseyClient) -> None:
@@ -328,6 +331,241 @@ def cmd_ws_tree(args: argparse.Namespace, client: OdysseyClient) -> None:
         return
     print(f"{args.workspace_id}/{args.path}")
     _print_tree(client, args.workspace_id, args.path, "", 0, args.depth)
+
+
+# ---------------------------------------------------------------------------
+# Simplified bidirectional file operations (cp / mv / rm / export / status)
+# ---------------------------------------------------------------------------
+
+def cmd_files_cp(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Copy a file between local filesystem and workspace.
+
+    odyssey files cp local.txt ws:/remote/path.txt   (local -> workspace)
+    odyssey files cp ws:/remote/path.txt local.txt   (workspace -> local)
+    """
+    src = args.source
+    dst = args.destination
+
+    if src.startswith("ws:") and not dst.startswith("ws:"):
+        # workspace -> local
+        remote_path = src[3:]
+        local_path = dst
+        result = client.workspace_file_download(args.workspace_id, remote_path, local_path)
+        print(
+            f"✅ Copied ws://{remote_path} → {local_path} "
+            f"({result.get('size_bytes', 0)} bytes)"
+        )
+    elif not src.startswith("ws:") and dst.startswith("ws:"):
+        # local -> workspace
+        local_path = src
+        remote_path = dst[3:]
+        try:
+            content = Path(local_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print_error(f"Cannot read {local_path}: {exc}")
+        result = client.workspace_file_put(args.workspace_id, remote_path, content)
+        print(
+            f"✅ Copied {local_path} → ws://{remote_path} "
+            f"({result.get('size_bytes', 0)} bytes)"
+        )
+    else:
+        print_error("Specify exactly one side as ws:/path (e.g. ws:/src/main.gd)")
+
+
+def cmd_files_mv(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Move a file between local filesystem and workspace (copy + delete source)."""
+    src = args.source
+    dst = args.destination
+
+    if src.startswith("ws:") and not dst.startswith("ws:"):
+        remote_path = src[3:]
+        local_path = dst
+        result = client.workspace_file_download(args.workspace_id, remote_path, local_path)
+        client.workspace_file_delete(args.workspace_id, remote_path)
+        print(
+            f"✅ Moved ws://{remote_path} → {local_path} "
+            f"({result.get('size_bytes', 0)} bytes)"
+        )
+    elif not src.startswith("ws:") and dst.startswith("ws:"):
+        local_path = src
+        remote_path = dst[3:]
+        try:
+            content = Path(local_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print_error(f"Cannot read {local_path}: {exc}")
+        client.workspace_file_put(args.workspace_id, remote_path, content)
+        Path(local_path).unlink()
+        print(f"✅ Moved {local_path} → ws://{remote_path}")
+    else:
+        print_error("Specify exactly one side as ws:/path")
+
+
+def cmd_files_rm(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Remove a file from workspace or local filesystem."""
+    target = args.path
+    if target.startswith("ws:"):
+        remote_path = target[3:]
+        client.workspace_file_delete(args.workspace_id, remote_path)
+        print(f"✅ Deleted ws://{remote_path}")
+    else:
+        p = Path(target)
+        if p.exists():
+            p.unlink()
+            print(f"✅ Deleted {target}")
+        else:
+            print_error(f"File not found: {target}")
+
+
+def cmd_files_export(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Download the entire workspace as a ZIP archive."""
+    out = args.output or f"odyssey-{args.workspace_id[:8]}.zip"
+    # The endpoint streams the ZIP; save it locally.
+    resp = client._request("GET", f"/workspaces/{args.workspace_id}/export.zip")
+    client._raise_for_status(resp)
+    try:
+        with open(out, "wb") as f:
+            for chunk in resp.iter_bytes(chunk_size=65536):
+                f.write(chunk)
+        size = os.path.getsize(out)
+        print(f"✅ Exported workspace to {out} ({size} bytes)")
+    except OSError as exc:
+        print_error(f"Cannot write {out}: {exc}")
+
+
+def cmd_files_status(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Show sync status between local directory and workspace."""
+    local_dir = Path(args.path or ".").resolve()
+    patterns = sync_mod.load_ignore_patterns(local_dir)
+    state = sync_mod.compute_sync_state(local_dir, client, args.workspace_id, patterns)
+
+    print(f"📁 Local:  {local_dir}")
+    print(f"📦 Workspace: {args.workspace_id}")
+    print(f"   Identical:  {len(state.identical)}")
+    print(f"   Only local: {len(state.only_local)} (to upload)")
+    print(f"   Only ws:    {len(state.only_workspace)} (to download)")
+    print(f"   Conflicts:  {len(state.conflicts)}")
+    print()
+
+    if state.only_local:
+        print("📤 To upload (local only):")
+        for rel in state.only_local[:20]:
+            print(f"   + {rel}")
+        if len(state.only_local) > 20:
+            print(f"   ... and {len(state.only_local) - 20} more")
+        print()
+
+    if state.only_workspace:
+        print("📥 To download (workspace only):")
+        for rel in state.only_workspace[:20]:
+            print(f"   - {rel}")
+        if len(state.only_workspace) > 20:
+            print(f"   ... and {len(state.only_workspace) - 20} more")
+        print()
+
+    if state.conflicts:
+        print("⚠️  Conflicts (different on both sides):")
+        for rel in state.conflicts[:20]:
+            print(f"   ? {rel}")
+        if len(state.conflicts) > 20:
+            print(f"   ... and {len(state.conflicts) - 20} more")
+        print()
+
+
+def cmd_files_sync_pull(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Pull files from workspace to local directory."""
+    local_dir = Path(args.path or ".").resolve()
+    patterns = sync_mod.load_ignore_patterns(local_dir)
+    result = sync_mod.sync_pull(
+        client, args.workspace_id, local_dir, patterns,
+        auto_resolve=args.auto_resolve,
+    )
+    print()
+    print(f"✅ Pull complete: {result['downloaded']} downloaded, "
+          f"{result['skipped']} skipped, {len(result['errors'])} errors")
+    if result["conflicts"]:
+        print(f"   ⚠️  {len(result['conflicts'])} conflicts unresolved")
+    if result["errors"]:
+        print("   Errors:")
+        for e in result["errors"][:10]:
+            print(f"     - {e}")
+
+
+def cmd_files_sync_push(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Push files from local directory to workspace."""
+    local_dir = Path(args.path or ".").resolve()
+    patterns = sync_mod.load_ignore_patterns(local_dir)
+    result = sync_mod.sync_push(
+        client, args.workspace_id, local_dir, patterns,
+        auto_resolve=args.auto_resolve,
+    )
+    print()
+    print(f"✅ Push complete: {result['uploaded']} uploaded, "
+          f"{result['skipped']} skipped, {len(result['errors'])} errors")
+    if result["conflicts"]:
+        print(f"   ⚠️  {len(result['conflicts'])} conflicts unresolved")
+    if result["errors"]:
+        print("   Errors:")
+        for e in result["errors"][:10]:
+            print(f"     - {e}")
+
+
+def cmd_files_sync_diff(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Show differences between local directory and workspace."""
+    local_dir = Path(args.path or ".").resolve()
+    patterns = sync_mod.load_ignore_patterns(local_dir)
+    diff = sync_mod.sync_diff(client, args.workspace_id, local_dir, patterns)
+
+    print(f"📁 Local:  {local_dir}")
+    print(f"📦 Workspace: {args.workspace_id}")
+    print()
+
+    if diff["identical"]:
+        print(f"✅ Identical: {len(diff['identical'])} files")
+    if diff["only_local"]:
+        print(f"📤 Only local ({len(diff['only_local'])}):")
+        for rel in diff["only_local"][:30]:
+            print(f"   + {rel}")
+    if diff["only_workspace"]:
+        print(f"📥 Only workspace ({len(diff['only_workspace'])}):")
+        for rel in diff["only_workspace"][:30]:
+            print(f"   - {rel}")
+    if diff["conflicts"]:
+        print(f"⚠️  Conflicts ({len(diff['conflicts'])}):")
+        for rel in diff["conflicts"][:30]:
+            print(f"   ? {rel}")
+
+
+def cmd_files_sync_watch(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Watch local directory and push changes to workspace automatically."""
+    local_dir = Path(args.path or ".").resolve()
+    patterns = sync_mod.load_ignore_patterns(local_dir)
+    sync_mod.sync_watch(
+        client, args.workspace_id, local_dir, patterns,
+        interval=args.interval,
+    )
+
+
+def cmd_files_sync_resolve(args: argparse.Namespace, client: OdysseyClient) -> None:
+    """Resolve a conflict by choosing local or workspace version."""
+    rel_path = args.path
+    if args.wins == "local":
+        local_dir = Path(args.local_path or ".").resolve()
+        try:
+            content = (local_dir / rel_path).read_text(encoding="utf-8")
+        except (OSError, UnicodeDecodeError) as exc:
+            print_error(f"Cannot read local {rel_path}: {exc}")
+        client.workspace_file_put(args.workspace_id, rel_path, content)
+        print(f"✅ Resolved {rel_path}: local → workspace")
+    elif args.wins == "workspace":
+        local_dir = Path(args.local_path or ".").resolve()
+        local_dir.mkdir(parents=True, exist_ok=True)
+        data = client.workspace_file_content(args.workspace_id, rel_path)
+        content = data.get("content", "")
+        local_path = local_dir / rel_path
+        local_path.parent.mkdir(parents=True, exist_ok=True)
+        local_path.write_text(content, encoding="utf-8")
+        print(f"✅ Resolved {rel_path}: workspace → local")
+
 
 
 def _tree_to_dict(
@@ -847,11 +1085,22 @@ def print_help_repl() -> None:
 
   files list <workspace_id> [path]                  Список файлов
   files read <workspace_id> <path> [--offset N] [--limit N]  Прочитать файл
-  files edit <workspace_id> <path> "content" [--base-content "..."]  Редактировать файл
+  files edit <workspace_id> <path> "content" [--base-content "..."]  Редактировать файл (требует одобрения)
   files search <workspace_id> <query> [path]      Поиск по файлам
   files download <workspace_id> <remote_path> <local_path>  Скачать файл
-  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл
+  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл (прямая запись)
+  files cp <workspace_id> <src> <dst>             Копировать файл (локально <-> ws:/path)
+  files mv <workspace_id> <src> <dst>             Переместить файл (локально <-> ws:/path)
+  files rm <workspace_id> <path>                  Удалить файл (локально или ws:/path)
+  files export <workspace_id> [-o out.zip]        Скачать весь воркспейс как ZIP
+  files status <workspace_id> [path]              Статус синхронизации (локально vs воркспейс)
   files tree <workspace_id> [path] [--depth N]    Дерево файлов
+
+  files sync pull <workspace_id> [path]           Скачать файлы из воркспейса локально
+  files sync push <workspace_id> [path]           Загрузить локальные файлы в воркспейс
+  files sync diff <workspace_id> [path]           Показать различия (без передачи)
+  files sync watch <workspace_id> [path]          Наблюдать за локальной папкой и пушить изменения
+  files sync resolve <workspace_id> <path> local|workspace  Разрешить конфликт
 
   session create <workspace_id> [--title TITLE]   Создать сессию
   session list <workspace_id> [--limit N]         Список сессий
@@ -1212,7 +1461,7 @@ _odyssey_complete() {
             COMPREPLY=( $(compgen -W 'create list get update start stop delete' -- "$cur") )
             ;;
         files)
-            COMPREPLY=( $(compgen -W 'list read edit search' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'list read edit search download upload cp mv rm export status tree sync' -- "$cur") )
             ;;
         session)
             COMPREPLY=( $(compgen -W 'create list' -- "$cur") )
@@ -1311,7 +1560,7 @@ complete -c odyssey -f -a 'completion' -d 'Shell completion scripts'
 # Subcommand completions
 complete -c odyssey -f -a 'register login logout' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
 complete -c odyssey -f -a 'create list get update start stop delete' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
-complete -c odyssey -f -a 'list read edit search' -d 'files subcommands' -n '__fish_seen_subcommand files'
+complete -c odyssey -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
 complete -c odyssey -f -a 'create list' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c odyssey -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c odyssey -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
@@ -1458,17 +1707,90 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("local_path")
     p.set_defaults(func=cmd_ws_download)
 
-    p = files_sub.add_parser("upload", help="Upload local file to workspace")
+    p = files_sub.add_parser("upload", help="Upload local file to workspace (direct write)")
     p.add_argument("local_path")
     p.add_argument("workspace_id")
     p.add_argument("remote_path")
     p.set_defaults(func=cmd_ws_upload)
+
+    p = files_sub.add_parser("cp", help="Copy file between local and workspace (ws:/path)")
+    p.add_argument("workspace_id")
+    p.add_argument("source", help="Local path or ws:/remote/path")
+    p.add_argument("destination", help="Local path or ws:/remote/path")
+    p.set_defaults(func=cmd_files_cp)
+
+    p = files_sub.add_parser("mv", help="Move file between local and workspace (ws:/path)")
+    p.add_argument("workspace_id")
+    p.add_argument("source", help="Local path or ws:/remote/path")
+    p.add_argument("destination", help="Local path or ws:/remote/path")
+    p.set_defaults(func=cmd_files_mv)
+
+    p = files_sub.add_parser("rm", help="Remove file from workspace or local")
+    p.add_argument("workspace_id")
+    p.add_argument("path", help="Local path or ws:/remote/path")
+    p.set_defaults(func=cmd_files_rm)
+
+    p = files_sub.add_parser("export", help="Download entire workspace as ZIP")
+    p.add_argument("workspace_id")
+    p.add_argument("--output", "-o", default=None, help="Output ZIP path (default: odyssey-<id>.zip)")
+    p.set_defaults(func=cmd_files_export)
+
+    p = files_sub.add_parser("status", help="Show sync status (local vs workspace)")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Local directory (default: .)")
+    p.set_defaults(func=cmd_files_status)
 
     p = files_sub.add_parser("tree", help="Show directory tree")
     p.add_argument("workspace_id")
     p.add_argument("path", nargs="?", default=".", help="Directory path (default: .)")
     p.add_argument("--depth", type=int, default=10, help="Max depth (default: 10)")
     p.set_defaults(func=cmd_ws_tree)
+
+    # files sync (two-way synchronisation)
+    sync = files_sub.add_parser("sync", help="Two-way sync local directory <-> workspace")
+    sync_sub = sync.add_subparsers(dest="sync_command", required=True)
+
+    p = sync_sub.add_parser("pull", help="Pull files from workspace to local")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Local directory (default: .)")
+    p.add_argument(
+        "--auto-resolve", choices=["workspace", "local", "ask"], default="workspace",
+        help="Conflict resolution (default: workspace wins)",
+    )
+    p.set_defaults(func=cmd_files_sync_pull)
+
+    p = sync_sub.add_parser("push", help="Push files from local to workspace")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Local directory (default: .)")
+    p.add_argument(
+        "--auto-resolve", choices=["local", "workspace", "ask"], default="local",
+        help="Conflict resolution (default: local wins)",
+    )
+    p.set_defaults(func=cmd_files_sync_push)
+
+    p = sync_sub.add_parser("diff", help="Show differences (no transfer)")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Local directory (default: .)")
+    p.set_defaults(func=cmd_files_sync_diff)
+
+    p = sync_sub.add_parser("watch", help="Watch local dir and push changes to workspace")
+    p.add_argument("workspace_id")
+    p.add_argument("path", nargs="?", default=".", help="Local directory (default: .)")
+    p.add_argument(
+        "--interval", type=float, default=2.0, help="Polling interval in seconds (default: 2.0)"
+    )
+    p.set_defaults(func=cmd_files_sync_watch)
+
+    p = sync_sub.add_parser("resolve", help="Resolve a conflict (local or workspace wins)")
+    p.add_argument("workspace_id")
+    p.add_argument("path", help="Relative path of conflicting file")
+    p.add_argument(
+        "wins", choices=["local", "workspace"], help="Which version wins"
+    )
+    p.add_argument(
+        "--local-path", default=".", help="Local directory (default: .)"
+    )
+    p.set_defaults(func=cmd_files_sync_resolve)
 
     # APK / Godot (runner-manager)
     p = ws_sub.add_parser("apk", help="Build a debug Android APK from workspace web files")
