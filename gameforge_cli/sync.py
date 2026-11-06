@@ -1,4 +1,4 @@
-"""Two-way file synchronisation between local filesystem and Odyssey workspace.
+"""Two-way file synchronisation between local filesystem and Gameforge workspace.
 
 Features:
   * pull  — download workspace files to local directory
@@ -7,7 +7,7 @@ Features:
   * watch — watch local directory and push changes automatically
   * conflict detection via SHA-256 checksums
   * progress bars for long transfers
-  * skip lists (.odysseyignore, .git, __pycache__, node_modules, .venv)
+  * skip lists (.gameforgeignore, .git, __pycache__, node_modules, .venv)
 """
 
 from __future__ import annotations
@@ -21,11 +21,11 @@ from dataclasses import dataclass, field
 from pathlib import Path
 from typing import Any
 
-from .client import OdysseyClient, OdysseyError
+from .client import GameforgeClient, GameforgeError
 
 
 # ---------------------------------------------------------------------------
-# Default ignore patterns (like .gitignore but for Odyssey sync)
+# Default ignore patterns (like .gitignore but for Gameforge sync)
 # ---------------------------------------------------------------------------
 DEFAULT_IGNORE_PATTERNS = [
     ".git",
@@ -40,8 +40,8 @@ DEFAULT_IGNORE_PATTERNS = [
     ".cache",
     ".DS_Store",
     "Thumbs.db",
-    ".odyssey",
-    ".odyssey-cli",
+    ".gameforge",
+    ".gameforge-cli",
     "*.log",
     "*.tmp",
     ".pytest_cache",
@@ -51,9 +51,9 @@ DEFAULT_IGNORE_PATTERNS = [
 
 
 def load_ignore_patterns(local_dir: Path) -> list[str]:
-    """Load ignore patterns from .odysseyignore if present, plus defaults."""
+    """Load ignore patterns from .gameforgeignore if present, plus defaults."""
     patterns = list(DEFAULT_IGNORE_PATTERNS)
-    ignore_file = local_dir / ".odysseyignore"
+    ignore_file = local_dir / ".gameforgeignore"
     if ignore_file.is_file():
         try:
             for line in ignore_file.read_text(encoding="utf-8").splitlines():
@@ -193,7 +193,7 @@ def list_local_files(local_dir: Path, patterns: list[str]) -> dict[str, FileEntr
     return entries
 
 
-def list_workspace_files(client: OdysseyClient, workspace_id: str) -> dict[str, FileEntry]:
+def list_workspace_files(client: GameforgeClient, workspace_id: str) -> dict[str, FileEntry]:
     """Build a dict of relative_path -> FileEntry for workspace files (recursive)."""
     entries: dict[str, FileEntry] = {}
     _collect_workspace_entries(client, workspace_id, ".", entries)
@@ -201,12 +201,12 @@ def list_workspace_files(client: OdysseyClient, workspace_id: str) -> dict[str, 
 
 
 def _collect_workspace_entries(
-    client: OdysseyClient, workspace_id: str, path: str, entries: dict[str, FileEntry]
+    client: GameforgeClient, workspace_id: str, path: str, entries: dict[str, FileEntry]
 ) -> None:
     """Recursively collect workspace file entries."""
     try:
         data = client.workspace_files(workspace_id, path)
-    except OdysseyError:
+    except GameforgeError:
         return
     for item in data.get("entries", []):
         name = item.get("name", "")
@@ -223,7 +223,7 @@ def _collect_workspace_entries(
 
 def compute_sync_state(
     local_dir: Path,
-    client: OdysseyClient,
+    client: GameforgeClient,
     workspace_id: str,
     patterns: list[str],
 ) -> SyncState:
@@ -267,7 +267,7 @@ def compute_sync_state(
 
 
 def sync_pull(
-    client: OdysseyClient,
+    client: GameforgeClient,
     workspace_id: str,
     local_dir: Path,
     patterns: list[str] | None = None,
@@ -298,7 +298,7 @@ def sync_pull(
             local_path.write_text(content, encoding="utf-8")
             downloaded += 1
             progress.update(downloaded + skipped, label=f"Pulling {source}: {rel}")
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             errors.append(f"{rel}: {exc}")
             skipped += 1
             progress.update(downloaded + skipped, label=f"Pulling {source}: {rel} (error)")
@@ -314,7 +314,7 @@ def sync_pull(
             progress.update(downloaded + skipped, label=f"Pulling: {rel} (local kept)")
         else:
             # ask: default to workspace for non-interactive, log conflict
-            errors.append(f"{rel}: conflict — use 'odyssey files sync resolve <path>'")
+            errors.append(f"{rel}: conflict — use 'gameforge files sync resolve <path>'")
             skipped += 1
             progress.update(downloaded + skipped, label=f"Pulling: {rel} (conflict)")
 
@@ -329,7 +329,7 @@ def sync_pull(
 
 
 def sync_push(
-    client: OdysseyClient,
+    client: GameforgeClient,
     workspace_id: str,
     local_dir: Path,
     patterns: list[str] | None = None,
@@ -365,7 +365,7 @@ def sync_push(
             client.workspace_file_put(workspace_id, rel, content)
             uploaded += 1
             progress.update(uploaded + skipped, label=f"Pushing {source}: {rel}")
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             errors.append(f"{rel}: {exc}")
             skipped += 1
             progress.update(uploaded + skipped, label=f"Pushing {source}: {rel} (error)")
@@ -380,7 +380,7 @@ def sync_push(
             skipped += 1
             progress.update(uploaded + skipped, label=f"Pushing: {rel} (workspace kept)")
         else:
-            errors.append(f"{rel}: conflict — use 'odyssey files sync resolve <path>'")
+            errors.append(f"{rel}: conflict — use 'gameforge files sync resolve <path>'")
             skipped += 1
             progress.update(uploaded + skipped, label=f"Pushing: {rel} (conflict)")
 
@@ -395,7 +395,7 @@ def sync_push(
 
 
 def sync_diff(
-    client: OdysseyClient,
+    client: GameforgeClient,
     workspace_id: str,
     local_dir: Path,
     patterns: list[str] | None = None,
@@ -415,7 +415,7 @@ def sync_diff(
 
 
 def sync_watch(
-    client: OdysseyClient,
+    client: GameforgeClient,
     workspace_id: str,
     local_dir: Path,
     patterns: list[str] | None = None,
@@ -466,7 +466,7 @@ def sync_watch(
                     try:
                         client.workspace_file_delete(workspace_id, actual)
                         print(f"   ✅ Removed from workspace")
-                    except OdysseyError as exc:
+                    except GameforgeError as exc:
                         print(f"   ❌ Failed to delete: {exc}")
                 else:
                     print(f"📝 Changed locally: {rel_path}")
@@ -476,7 +476,7 @@ def sync_watch(
                         print(f"   ✅ Pushed to workspace")
                     except (OSError, UnicodeDecodeError) as exc:
                         print(f"   ❌ Cannot read: {exc}")
-                    except OdysseyError as exc:
+                    except GameforgeError as exc:
                         print(f"   ❌ Push failed: {exc}")
 
             if changed:

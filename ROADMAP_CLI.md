@@ -1,24 +1,24 @@
-# Odyssey CLI — детальный дорожный карта внедрения функций (актуальная версия)
+# Gameforge CLI — детальный дорожный карта внедрения функций (актуальная версия)
 
-Цель документа: пошаговый план развития кастомного CLI (`/root/odyssey-cli`) для платформы Odyssey AI (`/root/saas-backend`) с опорой на опыт создания production-CLI (Click/Typer/argparse, структура пакета, конфигурация, аутентификация, вывод, ошибки, тестирование, release).
+Цель документа: пошаговый план развития кастомного CLI (`/root/gameforge-cli`) для платформы Gameforge AI (`/root/saas-backend`) с опорой на опыт создания production-CLI (Click/Typer/argparse, структура пакета, конфигурация, аутентификация, вывод, ошибки, тестирование, release).
 
 Источники:
 - `/root/saas-backend/API.md` — контракт REST API
 - `/root/saas-backend/app/schemas.py` — Pydantic-схемы
-- `/root/saas-backend/ODYSSEY_AI_ROADMAP.md` — бизнес-дорожная карта платформы
-- `/root/odyssey-cli/COMPARISON_CLAUDE_CODE.md` — сравнение с Claude Code и оценка сложности
-- `/root/odyssey-cli/CLI_IMPLEMENTATION_COMPLEXITY.md` — оценка сложности реализации CLI-функций
-- `/root/odyssey-cli/COMPARISON_ODYSSEY_VS_CLAUDE_CODE_CODEX_OPENCODE.md` — сравнение с конкурентами
+- `/root/saas-backend/GAMEFORGE_AI_ROADMAP.md` — бизнес-дорожная карта платформы
+- `/root/gameforge-cli/COMPARISON_CLAUDE_CODE.md` — сравнение с Claude Code и оценка сложности
+- `/root/gameforge-cli/CLI_IMPLEMENTATION_COMPLEXITY.md` — оценка сложности реализации CLI-функций
+- `/root/gameforge-cli/COMPARISON_GAMEFORGE_VS_CLAUDE_CODE_CODEX_OPENCODE.md` — сравнение с конкурентами
 
 ---
 
 ## 0. Текущее состояние (база)
 
 Уже реализовано и установлено:
-- Пакет `odyssey-cli` с точкой входа `odyssey` (`pyproject.toml`, `odyssey_cli/`)
-- Клиент `OdysseyClient` на `httpx` с базовыми методами (auth, users, workspaces, files, sessions, runs, chat, health, billing, admin, pty, git, mcp)
+- Пакет `gameforge-cli` с точкой входа `gameforge` (`pyproject.toml`, `gameforge_cli/`)
+- Клиент `GameforgeClient` на `httpx` с базовыми методами (auth, users, workspaces, files, sessions, runs, chat, health, billing, admin, pty, git, mcp)
 - CLI-команды через `argparse`
-- Конфиг в `~/.odyssey-cli/config.json`, поддержка `ODYSSEY_API_URL` / `ODYSSEY_TOKEN`
+- Конфиг в `~/.gameforge-cli/config.json`, поддержка `GAMEFORGE_API_URL` / `GAMEFORGE_TOKEN`
 - JSON-вывод через `print_json`, ошибки через `print_error` с exit-code 1
 - 39 тестов (`tests/test_cli.py`), `ruff check` и `mypy` чистые
 
@@ -45,7 +45,7 @@
 - `git clone|commit|push|pr` — Git-операции (клонирование, коммит, push, PR)
 - `mcp list|call` — MCP-инструменты (список и вызов)
 - Глобальные флаги `--verbose`, `--json`
-- Команда `config show|set` — управление `~/.odyssey-cli/config.json`
+- Команда `config show|set` — управление `~/.gameforge-cli/config.json`
 
 **Phase 3 — долгосрочно (коммиты `76138e9`, `0810e06`, `bf6aacf`, `a71f33c`):**
 - `run list <workspace_id>` — список всех runs в рабочей зоне (саб-агенты / параллельные задачи)
@@ -62,14 +62,14 @@
 
 | Область | Требование | Источник практики |
 |---|---|---|
-| Структура пакета | `pyproject.toml` + `odyssey_cli/` (плоский каталог), точка входа `[project.scripts]` | Python Packaging User Guide, Click/Typer проекты |
+| Структура пакета | `pyproject.toml` + `gameforge_cli/` (плоский каталог), точка входа `[project.scripts]` | Python Packaging User Guide, Click/Typer проекты |
 | CLI-интерфейс | Подкомманды (subcommands), глобальные флаги `--url`, `--token`, `--verbose`, `--json` | 12-Factor CLI, `argparse` subparsers |
-| Конфигурация | Приоритет: CLI-флаг > ENV > `~/.odyssey-cli/config.json` > дефолт | 12-Factor config, XDG Base Directory |
+| Конфигурация | Приоритет: CLI-флаг > ENV > `~/.gameforge-cli/config.json` > дефолт | 12-Factor config, XDG Base Directory |
 | Аутентификация | Bearer-токен в конфиге, `auth login` сохраняет, `auth logout` удаляет, никогда не печатать токен в логи | OWASP secret storage, CLI security |
 | Вывод | `print_json` для machine-readable, pretty-text для человека, `--json` forcing JSON, цвета только если `isatty(stdout)` | Unix CLI philosophy, `rich`/`click.style` |
 | Ошибки | Понятное сообщение в stderr, exit-code != 0, стек-трейс только при `--verbose` или `DEBUG=1` | GNU CLI standards, `click.exceptions` |
 | Тестирование | Каждая команда — отдельная функция, моки `httpx.Client`, тесты на succès/ошибку/валидацию | `pytest`, `responses`, `CliRunner` |
-| Документация | `odyssey --help`, `odyssey <cmd> --help`, README с примерами | Self-documenting CLI |
+| Документация | `gameforge --help`, `gameforge <cmd> --help`, README с примерами | Self-documenting CLI |
 | Выпуск | SemVer, `CHANGELOG.md`, сборка `pip install -e .` для dev, `pip install .` для release | Semantic Versioning |
 
 ---
@@ -96,7 +96,7 @@
 ### 2.4. Команда `doctor` — проверка окружения ✅
 **Сложность:** Low
 **Статус:** Готово
-Проверка `ODYSSEY_API_URL`, `ODYSSEY_TOKEN`, доступность `/health` и `/ready`, валидность токена.
+Проверка `GAMEFORGE_API_URL`, `GAMEFORGE_TOKEN`, доступность `/health` и `/ready`, валидность токена.
 
 ### 2.5. Поддержка stdin для всех подходящих команд ✅
 **Сложность:** Low
@@ -117,11 +117,11 @@
 ### 3.1. Автодополнение (shell completion) для bash/zsh/fish ✅
 **Сложность:** Medium
 **Статус:** Готово
-Команда `odyssey completion <bash|zsh|fish>` генерирует скрипты автодополнения для соответствующей оболочки.
+Команда `gameforge completion <bash|zsh|fish>` генерирует скрипты автодополнения для соответствующей оболочки.
 **Критерии приёма:**
-- `odyssey completion bash` — скрипт для .bashrc
-- `odyssey completion zsh` — скрипт для .zshrc
-- `odyssey completion fish` — скрипт для ~/.config/fish/completions/
+- `gameforge completion bash` — скрипт для .bashrc
+- `gameforge completion zsh` — скрипт для .zshrc
+- `gameforge completion fish` — скрипт для ~/.config/fish/completions/
 - Автодополнение работает для всех подкоманд и флагов
 
 ### 3.2. Экспорт/импорт файлов workspace (`files upload\|download`) ✅
@@ -135,7 +135,7 @@
 ### 3.3. Дерево файлов (`files tree`) ✅
 **Сложность:** Medium
 **Статус:** Готово
-Команда `odyssey files tree <workspace_id> [path] [--depth N]`.
+Команда `gameforge files tree <workspace_id> [path] [--depth N]`.
 **Критерии приёма:**
 - Рекурсивный обход каталогов через повторные `files list`
 - Отрисовка дерева с отступами (├──, └──, 📁, 📄)
@@ -144,11 +144,11 @@
 ### 3.4. История команд CLI ✅
 **Сложность:** Medium
 **Статус:** Готово
-Команда `odyssey history [N]`.
+Команда `gameforge history [N]`.
 **Критерии приёма:**
-- Сохранение последних N команд в `~/.odyssey-cli/history.json`
+- Сохранение последних N команд в `~/.gameforge-cli/history.json`
 - Команда `history` для просмотра
-- Повтор команды по номеру: `odyssey history 3`
+- Повтор команды по номеру: `gameforge history 3`
 
 ### 3.5. Параллельное выполнение нескольких команд
 **Сложность:** Medium
@@ -213,8 +213,8 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 - [ ] Прочитать соответствующий раздел `API.md` и `app/schemas.py`
 - [ ] Проверить, что эндпоинт существует в `app/endpoints/*.py`
 - [ ] Написать тест с моком `httpx` перед реализацией (TDD)
-- [ ] Добавить команду в `build_parser()` в `odyssey_cli/cli.py`
-- [ ] Добавить метод в `OdysseyClient` в `odyssey_cli/client.py`
+- [ ] Добавить команду в `build_parser()` в `gameforge_cli/cli.py`
+- [ ] Добавить метод в `GameforgeClient` в `gameforge_cli/client.py`
 - [ ] Обновить `README.md` с примером использования
 - [ ] Запустить `ruff check`, `mypy`, `pytest`
 - [ ] Проверить на реальном стенде (если API доступен)
@@ -222,7 +222,7 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 
 ---
 
-## 8. Риски и факторы сложности (Odyssey vs Claude Code)
+## 8. Риски и факторы сложности (Gameforge vs Claude Code)
 
 1. **Разделение ролей:** API, worker, runner-manager — разные контейнеры. Любая новая функция требует согласованного выката.
 2. **Безопасность:** Docker-сокет только у `runner-manager`. Интерактивная работа с контейнером требует проксирования через runner, не прямого доступа.
@@ -236,50 +236,50 @@ cli-file-edit;feature;180;2026-10-31T14:00:00Z;lint;pytest;check-fast;yes
 
 ```
 # Уже доступно
-odyssey auth register|login|logout
-odyssey me|usage|memory get|put
-odyssey workspace create|list|get|update|start|stop|delete
-odyssey files list|read|search|edit
-odyssey session create|list
-odyssey run create|get|message|answer|context|revert|review|stop|events|list
-odyssey process start|output|stop
-odyssey payment create|list
-odyssey admin status
-odyssey term <workspace_id>
-odyssey tui <workspace_id> [--run-id <id>]
-odyssey git clone|commit|push|pr <ws> ...
-odyssey mcp list|call <tool> <ws> ...
-odyssey config show|set [--json] [--url URL] [--token TOKEN] [--verbose]
-odyssey chat "текст"
-odyssey health|ready
+gameforge auth register|login|logout
+gameforge me|usage|memory get|put
+gameforge workspace create|list|get|update|start|stop|delete
+gameforge files list|read|search|edit
+gameforge session create|list
+gameforge run create|get|message|answer|context|revert|review|stop|events|list
+gameforge process start|output|stop
+gameforge payment create|list
+gameforge admin status
+gameforge term <workspace_id>
+gameforge tui <workspace_id> [--run-id <id>]
+gameforge git clone|commit|push|pr <ws> ...
+gameforge mcp list|call <tool> <ws> ...
+gameforge config show|set [--json] [--url URL] [--token TOKEN] [--verbose]
+gameforge chat "текст"
+gameforge health|ready
 
 # Фаза 4 (быстрые победы, Low)
-odyssey --json <любая команда>
-odyssey --verbose <любая команда>
-odyssey doctor
-odyssey config export|import
-odyssey files edit --content "-" (stdin)
-odyssey run message --text "-" (stdin)
+gameforge --json <любая команда>
+gameforge --verbose <любая команда>
+gameforge doctor
+gameforge config export|import
+gameforge files edit --content "-" (stdin)
+gameforge run message --text "-" (stdin)
 
 # Фаза 5 (среднесрочно, Medium)
-odyssey completion install (bash/zsh/fish)
-odyssey files download <ws> <remote> <local>
-odyssey files upload <local> <ws> <remote>
-odyssey files tree <ws> [path]
-odyssey history
-odyssey <cmd1> && <cmd2> & (параллельно)
+gameforge completion install (bash/zsh/fish)
+gameforge files download <ws> <remote> <local>
+gameforge files upload <local> <ws> <remote>
+gameforge files tree <ws> [path]
+gameforge history
+gameforge <cmd1> && <cmd2> & (параллельно)
 
 # Фаза 6 (долгосрочно, High)
-odyssey repl (интерактивный режим)
-odyssey runs graph <workspace_id> (визуализация зависимостей)
+gameforge repl (интерактивный режим)
+gameforge runs graph <workspace_id> (визуализация зависимостей)
 
 # Требуют бэкенда
-odyssey workspace import <url>
-odyssey workspace export <path>
-odyssey workspace preview <url>
-odyssey session archive|restore
-odyssey run patch <run_id>
-odyssey run memory-suggestions <run_id> <suggestion_id> <accept|dismiss>
+gameforge workspace import <url>
+gameforge workspace export <path>
+gameforge workspace preview <url>
+gameforge session archive|restore
+gameforge run patch <run_id>
+gameforge run memory-suggestions <run_id> <suggestion_id> <accept|dismiss>
 ```
 
 ---
@@ -295,4 +295,4 @@ odyssey run memory-suggestions <run_id> <suggestion_id> <accept|dismiss>
 
 ---
 
-*Документ поддерживается разработчиком. Обновлять после завершения каждой фазы и изменения приоритетов в `ODYSSEY_AI_ROADMAP.md`.*
+*Документ поддерживается разработчиком. Обновлять после завершения каждой фазы и изменения приоритетов в `GAMEFORGE_AI_ROADMAP.md`.*

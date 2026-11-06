@@ -14,7 +14,7 @@ DEFAULT_RUNNER_URL = "http://localhost:8090"
 
 
 def get_base_url() -> str:
-    return os.environ.get("ODYSSEY_API_URL") or load_config().get(
+    return os.environ.get("GAMEFORGE_API_URL") or load_config().get(
         "base_url", DEFAULT_BASE_URL
     ).rstrip("/")
 
@@ -26,7 +26,7 @@ def set_base_url(url: str) -> None:
 
 
 def get_runner_url() -> str:
-    return os.environ.get("ODYSSEY_RUNNER_URL") or load_config().get(
+    return os.environ.get("GAMEFORGE_RUNNER_URL") or load_config().get(
         "runner_url", DEFAULT_RUNNER_URL
     ).rstrip("/")
 
@@ -38,7 +38,7 @@ def set_runner_url(url: str) -> None:
 
 
 def get_token() -> str | None:
-    return os.environ.get("ODYSSEY_TOKEN") or load_config().get("token")
+    return os.environ.get("GAMEFORGE_TOKEN") or load_config().get("token")
 
 
 def set_token(token: str | None) -> None:
@@ -51,7 +51,7 @@ def set_token(token: str | None) -> None:
 
 
 def get_runner_token() -> str | None:
-    return os.environ.get("ODYSSEY_RUNNER_TOKEN") or load_config().get("runner_token")
+    return os.environ.get("GAMEFORGE_RUNNER_TOKEN") or load_config().get("runner_token")
 
 
 def set_runner_token(token: str | None) -> None:

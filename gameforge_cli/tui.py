@@ -1,8 +1,8 @@
-"""Полноценный TUI для Odyssey AI (как Claude Code / Codex).
+"""Полноценный TUI для Gameforge AI (как Claude Code / Codex).
 
 Разметка экрана:
   ┌─────────────────────────────────────────────────────────────┐
-  │  Header: Odyssey AI | workspace | run | API | clock         │
+  │  Header: Gameforge AI | workspace | run | API | clock         │
   ├──────────┬───────────────────────────────────────────────────┤
   │          │                                                   │
   │  Sidebar │  Основная область: лента событий (SSE)            │
@@ -46,12 +46,12 @@ from textual.widgets import (
 )
 from textual.widgets.tree import TreeNode
 
-from .client import OdysseyClient, OdysseyError
+from .client import GameforgeClient, GameforgeError
 from . import sync as sync_mod
 
 
-class OdysseyTUI(App[None]):
-    """Полноценный интерактивный TUI клиент для Odyssey AI platform."""
+class GameforgeTUI(App[None]):
+    """Полноценный интерактивный TUI клиент для Gameforge AI platform."""
 
     CSS = """
     #app-container {
@@ -149,7 +149,7 @@ class OdysseyTUI(App[None]):
         self.token = token
         self.workspace_id = workspace_id
         self.run_id = run_id
-        self.client: OdysseyClient | None = None
+        self.client: GameforgeClient | None = None
         self._tree_nodes: dict[str, TreeNode] = {}
         self._events_log: list[dict[str, Any]] = []
 
@@ -162,7 +162,7 @@ class OdysseyTUI(App[None]):
 
         with Container(id="app-container"):
             yield Static(
-                f"🚀 Odyssey AI  |  Workspace: {self.workspace_id}  |  "
+                f"🚀 Gameforge AI  |  Workspace: {self.workspace_id}  |  "
                 f"Run: {self.run_id or '—'}  |  API: {self.base_url}",
                 id="header-bar",
             )
@@ -201,7 +201,7 @@ class OdysseyTUI(App[None]):
     # ------------------------------------------------------------------
 
     async def on_mount(self) -> None:
-        self.client = OdysseyClient(base_url=self.base_url, token=self.token)
+        self.client = GameforgeClient(base_url=self.base_url, token=self.token)
         self._update_status("Подключён к API")
         self._update_help(
             "Ctrl+Q выход  •  Ctrl+S синхронизация  •  Ctrl+F файлы  •  Ctrl+R обновить  •  Ctrl+C стоп ran"
@@ -218,7 +218,7 @@ class OdysseyTUI(App[None]):
             self._write_event(
                 "system",
                 "Рабочая зона выбрана. Создайте ran: /run create <prompt> или "
-                "используйте CLI: odyssey run create <session_id> --prompt '...'",
+                "используйте CLI: gameforge run create <session_id> --prompt '...'",
             )
 
     async def _load_workspace_info(self) -> None:
@@ -234,7 +234,7 @@ class OdysseyTUI(App[None]):
                 f"Режим: {ws.get('approval_mode', '—')}\n"
                 f"Создан: {ws.get('created_at', '—')[:16] if ws.get('created_at') else '—'}"
             )
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._update_status(f"Ошибка загрузки воркспейса: {exc}")
 
     async def _load_file_tree(self) -> None:
@@ -245,7 +245,7 @@ class OdysseyTUI(App[None]):
             data = self.client.workspace_files(self.workspace_id, ".")
             self._populate_tree(tree.root, data.get("entries", []), ".")
             tree.root.expand()
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._write_event("error", f"Не удалось загрузить файлы: {exc}")
 
     def _populate_tree(
@@ -278,7 +278,7 @@ class OdysseyTUI(App[None]):
         try:
             async for ev in self._aiter_events(target_id):
                 self.call_later(self._display_event, ev)
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self.call_later(self._show_error, f"Ошибка SSE: {exc}")
         except Exception as exc:  # noqa: BLE001
             self.call_later(self._show_error, f"Неожиданная ошибка: {exc}")
@@ -432,7 +432,7 @@ class OdysseyTUI(App[None]):
             return
         try:
             self.client.run_message(self.run_id, text)
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Не удалось отправить сообщение: {exc}")
 
     # ------------------------------------------------------------------
@@ -450,7 +450,7 @@ class OdysseyTUI(App[None]):
                 f"[bold]Статус:[/] {ws.get('status', '—')}  "
                 f"[bold]Режим:[/] {ws.get('approval_mode', '—')}"
             )
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Ошибка статуса: {exc}")
 
     async def _cmd_run(self, args: list[str]) -> None:
@@ -484,7 +484,7 @@ class OdysseyTUI(App[None]):
             log.write(f"[bold green]✅ Ran создан:[/] {run_id}")
             # Запускаем стрим событий для нового ran
             self.run_worker(self._stream_events(), name=f"event-stream-{run_id}", exclusive=True)
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Ошибка создания ran: {exc}")
 
     async def _cmd_sync(self, args: list[str]) -> None:
@@ -541,7 +541,7 @@ class OdysseyTUI(App[None]):
                 log.write(f"  {icon} {entry.get('name', '')}{size_str}")
             if len(entries) > 30:
                 log.write(f"  … и ещё {len(entries) - 30}")
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Ошибка списка файлов: {exc}")
 
     # ------------------------------------------------------------------
@@ -563,7 +563,7 @@ class OdysseyTUI(App[None]):
             log = self.query_one("#event-log", RichLog)
             log.write(f"[bold]📄 Файл:[/] {path} ({content.get('size_bytes', 0)} байт)")
             log.write(f"```\n{text[:2000]}{'…' if len(text) > 2000 else ''}\n```")
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Не удалось прочитать файл: {exc}")
 
     async def on_tree_node_expanded(self, event: Tree.NodeExpanded) -> None:
@@ -580,7 +580,7 @@ class OdysseyTUI(App[None]):
             # Удаляем placeholder, если был, и заполняем реальными записями
             node.remove_children()
             self._populate_tree(node, data_resp.get("entries", []), path)
-        except OdysseyError as exc:
+        except GameforgeError as exc:
             self._show_error(f"Не удалось загрузить директорию: {exc}")
 
     # ------------------------------------------------------------------
@@ -601,7 +601,7 @@ class OdysseyTUI(App[None]):
                 try:
                     self.client.run_stop(self.run_id)
                     self._write_event("system", "Ran остановлен пользователем")
-                except OdysseyError as exc:
+                except GameforgeError as exc:
                     self._show_error(f"Не удалось остановить ran: {exc}")
 
     async def on_unmount(self) -> None:
@@ -616,5 +616,5 @@ def run_tui(
     run_id: str | None = None,
 ) -> None:
     """Запустить TUI приложение."""
-    app = OdysseyTUI(base_url=base_url, token=token, workspace_id=workspace_id, run_id=run_id)
+    app = GameforgeTUI(base_url=base_url, token=token, workspace_id=workspace_id, run_id=run_id)
     app.run()
