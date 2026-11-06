@@ -12,11 +12,11 @@ import httpx
 from .config import get_base_url, get_runner_token, get_runner_url, get_token
 
 
-class GameforgeError(Exception):
+class DarkmageError(Exception):
     pass
 
 
-class GameforgeClient:
+class DarkmageClient:
     def __init__(self, base_url: str | None = None, token: str | None = None):
         self.base_url = (base_url or get_base_url()).rstrip("/")
         self.runner_url = get_runner_url().rstrip("/")
@@ -41,7 +41,7 @@ class GameforgeClient:
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.RequestError as exc:
-            raise GameforgeError(f"Cannot reach {url}: {exc}") from exc
+            raise DarkmageError(f"Cannot reach {url}: {exc}") from exc
         return resp
 
     def _json_or_text(self, resp: httpx.Response) -> Any:
@@ -58,7 +58,7 @@ class GameforgeClient:
                 detail = body.get("detail", "") if isinstance(body, dict) else str(body)
             except ValueError:
                 detail = resp.text
-            raise GameforgeError(
+            raise DarkmageError(
                 f"{resp.status_code} {resp.reason_phrase} for {resp.request.method} {resp.url.path}: {detail}"
             )
 
@@ -138,7 +138,7 @@ class GameforgeClient:
         if approval_mode is not None:
             body["approval_mode"] = approval_mode
         if not body:
-            raise GameforgeError("Provide --name or --approval-mode")
+            raise DarkmageError("Provide --name or --approval-mode")
         resp = self._request("PATCH", f"/workspaces/{workspace_id}", json=body)
         self._raise_for_status(resp)
         return self._json_or_text(resp)
@@ -211,7 +211,7 @@ class GameforgeClient:
             with open(local_path, "w", encoding="utf-8") as f:
                 f.write(content)
         except OSError as exc:
-            raise GameforgeError(f"Cannot write to {local_path}: {exc}")
+            raise DarkmageError(f"Cannot write to {local_path}: {exc}")
         return {
             "workspace_id": workspace_id,
             "remote_path": remote_path,
@@ -246,7 +246,7 @@ class GameforgeClient:
             with open(local_path, "r", encoding="utf-8") as f:
                 content = f.read()
         except OSError as exc:
-            raise GameforgeError(f"Cannot read {local_path}: {exc}")
+            raise DarkmageError(f"Cannot read {local_path}: {exc}")
         return self.workspace_file_put(workspace_id, remote_path, content)
 
     def workspace_file_upload_binary(self, local_path: str, workspace_id: str, remote_path: str) -> dict:
@@ -254,9 +254,9 @@ class GameforgeClient:
         try:
             data = Path(local_path).read_bytes()
         except OSError as exc:
-            raise GameforgeError(f"Cannot read {local_path}: {exc}")
+            raise DarkmageError(f"Cannot read {local_path}: {exc}")
         if len(data) > 1_500_000:
-            raise GameforgeError(f"File too large (>1.5 MB): {local_path}")
+            raise DarkmageError(f"File too large (>1.5 MB): {local_path}")
         import base64
         return self.workspace_file_edit(
             workspace_id=workspace_id,
@@ -326,10 +326,10 @@ class GameforgeClient:
             for image_path in images:
                 p = Path(image_path)
                 if not p.is_file():
-                    raise GameforgeError(f"Image not found: {image_path}")
+                    raise DarkmageError(f"Image not found: {image_path}")
                 data = p.read_bytes()
                 if len(data) > 1_500_000:
-                    raise GameforgeError(f"Image too large (>1.5 MB): {image_path}")
+                    raise DarkmageError(f"Image too large (>1.5 MB): {image_path}")
                 mime = _image_mime(data)
                 image_list.append(
                     {
@@ -750,7 +750,7 @@ def _image_mime(data: bytes) -> str:
         return "image/jpeg"
     if data.startswith(b"RIFF") and data[8:12] == b"WEBP":
         return "image/webp"
-    raise GameforgeError("Unsupported image format (PNG, JPEG, WEBP only)")
+    raise DarkmageError("Unsupported image format (PNG, JPEG, WEBP only)")
 
 
 def print_json(data: Any) -> None:

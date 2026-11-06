@@ -1,10 +1,10 @@
-# Gameforge AI CLI — Детальный анализ и дорожная карта развития
+# Darkmage AI CLI — Детальный анализ и дорожная карта развития
 
-**Источник:** анализ кода `/root/saas-backend` (бакенд), `/root/gameforge-cli` (CLI), исследование OpenRouter, OmniRoute, Claude Code, Claude Codex и других AI-агентов (октябрь 2026)
+**Источник:** анализ кода `/root/saas-backend` (бакенд), `/root/darkmage-cli` (CLI), исследование OpenRouter, OmniRoute, Claude Code, Claude Codex и других AI-агентов (октябрь 2026)
 
 ---
 
-## 1. Краткий обзор текущего состояния Gameforge CLI
+## 1. Краткий обзор текущего состояния Darkmage CLI
 
 ### Что уже реализовано
 
@@ -57,9 +57,9 @@
 - Мультиагентность
 - Саб-агенты
 
-**Отличия от Gameforge:**
+**Отличия от Darkmage:**
 - Claude Code — локальный клиент, работающий с локальными файлами
-- Gameforge — серверная платформа с изолированными sandbox-контейнерами
+- Darkmage — серверная платформа с изолированными sandbox-контейнерами
 - Claude Code не имеет встроенного изолированного sandbox для кода
 
 ### 2.3 Claude Codex (OpenAI)
@@ -85,7 +85,7 @@
 
 ## 3. Сравнительная матрица функций
 
-| Возможность | Gameforge AI | OmniRoute | Claude Code | Codex | albytehq/ecode | spacy-cloud/agent-box |
+| Возможность | Darkmage AI | OmniRoute | Claude Code | Codex | albytehq/ecode | spacy-cloud/agent-box |
 |-------------|------------|-----------|-------------|-------|----------------|---------------------|
 | **Изолированный sandbox** | ✅ Docker+gVisor | ❌ Нет | ❌ Нет | ❌ Нет | ✅ Да | ✅ Да |
 | **Серверная политика одобрения** | ✅ Да | ❌ Нет | ❌ Нет | ❌ Нет | ✅ Да | ✅ Да |
@@ -103,7 +103,7 @@
 
 ---
 
-## 4. Сильные стороны Gameforge CLI
+## 4. Сильные стороны Darkmage CLI
 
 1. **Изолированный sandbox** — Docker + gVisor обеспечивает реальную изоляцию кода, что отсутствует у Claude Code, Codex и OmniRoute
 2. **Серверная политика одобрения** — модель не может расширить права без владельца
@@ -116,7 +116,7 @@
 
 ---
 
-## 8. Слабые стороны Gameforge CLI
+## 8. Слабые стороны Darkmage CLI
 
 | Возможность | Статус | Решение |
 |-------------|----------|---------|
@@ -136,21 +136,21 @@
 
 | Задача | Сложность | Описание |
 |--------|-----------|----------|
-| `gameforge auth login --email --password` | Low | Already implemented |
-| `gameforge auth interactive` | Done | Interactive login |
-| `gameforge start` | Done | Login + TUI |
-| `gameforge config set --url --token` | Done | Token via env var only |
-| `gameforge config show|export|import` | Done | Config management |
-| `gameforge files download|upload` | Done | File transfer |
-| `gameforge files tree` | Done | Recursive directory tree |
-| `gameforge history [N]` | Done | Command history with repeat |
-| `gameforge completion <bash\|zsh\|fish>` | Done | Shell completion |
+| `darkmage auth login --email --password` | Low | Already implemented |
+| `darkmage auth interactive` | Done | Interactive login |
+| `darkmage start` | Done | Login + TUI |
+| `darkmage config set --url --token` | Done | Token via env var only |
+| `darkmage config show|export|import` | Done | Config management |
+| `darkmage files download|upload` | Done | File transfer |
+| `darkmage files tree` | Done | Recursive directory tree |
+| `darkmage history [N]` | Done | Command history with repeat |
+| `darkmage completion <bash\|zsh\|fish>` | Done | Shell completion |
 
 ### Фаза 2: Среднесрочно (1–4 недели)
 
 | Задача | Сложность | Описание |
 |--------|-----------|----------|
-| Прямое редактирование файлов без run | Medium | `gameforge files edit <ws> <file> --content "..."` напрямую через API без создания run |
+| Прямое редактирование файлов без run | Medium | `darkmage files edit <ws> <file> --content "..."` напрямую через API без создания run |
 | Прямое создание/удаление файлов | Medium | `files write|delete` через API |
 | Расширенный `files list` | Medium | Фильтрация, сортировка, размеры |
 | История команд с поиском | Medium | Поиск по истории команд |
@@ -162,9 +162,9 @@
 
 | Задача | Сложность | Описание |
 |--------|-----------|----------|
-| Полноценный интерактивный терминал | High | `gameforge term` с полноценным PTY, поддержкой размеров экрана, цветом |
-| Интеграция Git в TUI | High | `gameforge git` внутри TUI |
-| Полноценный TUI | High | `gameforge tui` с полноценным интерфейсом, разделением на панели |
+| Полноценный интерактивный терминал | High | `darkmage term` с полноценным PTY, поддержкой размеров экрана, цветом |
+| Интеграция Git в TUI | High | `darkmage git` внутри TUI |
+| Полноценный TUI | High | `darkmage tui` с полноценным интерфейсом, разделением на панели |
 | Саб-агенты | High | Множественные агенты в одном workspace |
 | Экспорт/импорт конфигурации | Medium | `config export|import` уже есть |
 
@@ -188,7 +188,7 @@
 
 ### Долгосрочно (1-3 месяца):
 
-1. **Полноценный TUI** — `gameforge tui` с разделением на панели, интерактивным терминалом, файлами
+1. **Полноценный TUI** — `darkmage tui` с разделением на панели, интерактивным терминалом, файлами
 2. **Интеграция Git в TUI** — возможность делать commit, push, pull прямо из интерфейса
 3. **Саб-агенты** — возможность запуска нескольких агентов в одном workspace
 4. **Публичный API** — документация для внешних интеграций
@@ -206,7 +206,7 @@
 
 ### На этой неделе:
 
-1. Реализовать полноценный `gameforge term` с поддержкой размеров экрана
+1. Реализовать полноценный `darkmage term` с поддержкой размеров экрана
 2. Добавить `workspace import` для клонирования git-репозиториев
 3. Улучшить README с примерами использования
 4. Добавить примеры в документацию
@@ -222,7 +222,7 @@
 
 ## 11. Заключение
 
-Gameforge CLI имеет прочную основу с полным покрытием API бэкенда. Основные направления развития:
+Darkmage CLI имеет прочную основу с полным покрытием API бэкенда. Основные направления развития:
 
 1. **Интерактивность** — полноценный терминал и TUI
 2. **Удобство использования** — лучший вывод, автодополнение, история
@@ -231,4 +231,4 @@ Gameforge CLI имеет прочную основу с полным покры�
 
 Проект имеет хороший потенциал и уже 덮ycjiвает многие ключевые функции, которых нет у конкурентов (изолированный sandbox, серверная политика одобрения, чекпоинты, детальный учёт стоимости).
 
-Файл сохранён: `/root/gameforge-cli/ANALYSIS_GAMEFORGE_VS_OMNIROUTE.md` (232 строки, подробный анализ)
+Файл сохранён: `/root/darkmage-cli/ANALYSIS_DARKMAGE_VS_OMNIROUTE.md` (232 строки, подробный анализ)

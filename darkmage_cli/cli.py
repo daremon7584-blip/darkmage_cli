@@ -8,17 +8,17 @@ import sys
 from pathlib import Path
 from typing import Any, cast
 
-from .client import GameforgeClient, GameforgeError, print_error, print_json
+from .client import DarkmageClient, DarkmageError, print_error, print_json
 from .config import get_token, load_config, save_config
 from . import sync as sync_mod
 
 
-def cmd_register(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_register(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.register(args.email, args.password, args.full_name)
     print_json(data)
 
 
-def cmd_login(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_login(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Войти в систему. Можно передать email и пароль аргументами,
     или ввести интерактивно (как в Claude Code)."""
     from .config import set_token
@@ -48,22 +48,22 @@ def cmd_login(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_json(data)
 
 
-def cmd_logout(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_logout(args: argparse.Namespace, client: DarkmageClient) -> None:
     client.logout()
     print("Logged out.")
 
 
-def cmd_auth_interactive(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Интерактивный вход/регистрация как в Claude Code."""
 
-    print("👋 Добро пожаловать в Gameforge AI")
+    print("👋 Добро пожаловать в Darkmage AI")
     print()
 
     # Проверяем, уже есть ли токен
     config = load_config()
     if config.get("token") and config.get("base_url"):
         print(f"Вы уже вошли как токен: {config['token'][:8]}...")
-        print("Используйте 'gameforge auth logout' для выхода.")
+        print("Используйте 'darkmage auth logout' для выхода.")
         return
 
     email = input("Email: ").strip()
@@ -88,7 +88,7 @@ def cmd_auth_interactive(args: argparse.Namespace, client: GameforgeClient) -> N
             client.token = token
             print(f"\n✅ Вход выполнен как {email}")
             return
-    except GameforgeError as exc:
+    except DarkmageError as exc:
         if "already exists" in str(exc).lower() or "not found" in str(exc).lower():
             pass  # Регистрируемся ниже
         else:
@@ -107,23 +107,23 @@ def cmd_auth_interactive(args: argparse.Namespace, client: GameforgeClient) -> N
             print(f"\n✅ Аккаунт создан и вход выполнен как {email}")
         else:
             print(f"Не удалось зарегистрироваться: {data}")
-    except GameforgeError as exc:
+    except DarkmageError as exc:
         print(f"Ошибка регистрации: {exc}")
         return
 
     # Предлагаем открыть рабочую зону
     print()
     print("🎉 Готово! Теперь вы можете:")
-    print("  gameforge workspace list   — посмотреть рабочие зоны")
-    print("  gameforge tui <workspace_id> — открыть интерактивный терминал")
+    print("  darkmage workspace list   — посмотреть рабочие зоны")
+    print("  darkmage tui <workspace_id> — открыть интерактивный терминал")
 
 
-def cmd_login_alias(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_login_alias(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Alias для auth interactive."""
     cmd_auth_interactive(args, client)
 
 
-def cmd_start(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Запуск интерактивного сеанса как в Claude Code."""
     from .config import load_config
 
@@ -149,12 +149,12 @@ def cmd_start(args: argparse.Namespace, client: GameforgeClient) -> None:
     try:
         workspaces = client.workspace_list()
         if not workspaces:
-            print("   Рабочие зоны не найдены. Создайте новую: gameforge workspace create --name <имя>")
+            print("   Рабочие зоны не найдены. Создайте новую: darkmage workspace create --name <имя>")
             return
         for i, ws in enumerate(workspaces, 1):
             status = _color_status(ws.get("status", ""))
             print(f"  {i}. {ws.get('name')} ({ws.get('id')}) [{status}]")
-    except GameforgeError as exc:
+    except DarkmageError as exc:
         print(f"Ошибка получения рабочих зон: {exc}")
         return
 
@@ -185,27 +185,27 @@ def cmd_start(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_me(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_me(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.me())
 
 
-def cmd_usage(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_usage(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.usage())
 
 
-def cmd_memory_get(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_memory_get(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.memory_get())
 
 
-def cmd_memory_put(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_memory_put(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.memory_put(args.content))
 
 
-def cmd_ws_create(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.workspace_create(args.name))
 
 
-def cmd_ws_list(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     workspaces = client.workspace_list(args.limit)
     if args.json or not sys.stdout.isatty():
         print_json(workspaces)
@@ -223,7 +223,7 @@ def cmd_ws_list(args: argparse.Namespace, client: GameforgeClient) -> None:
         print("Нет рабочих зон.")
 
 
-def cmd_ws_get(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_get(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.workspace_get(args.workspace_id)
     if args.json or not sys.stdout.isatty():
         print_json(data)
@@ -236,13 +236,13 @@ def cmd_ws_get(args: argparse.Namespace, client: GameforgeClient) -> None:
     print(f"Обновлён:  {data.get('updated_at', '')}")
 
 
-def cmd_ws_update(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_update(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(
         client.workspace_update(args.workspace_id, args.name, args.approval_mode)
     )
 
 
-def cmd_ws_start(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_start(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.workspace_start(args.workspace_id)
     if args.json or not sys.stdout.isatty():
         print_json(data)
@@ -251,7 +251,7 @@ def cmd_ws_start(args: argparse.Namespace, client: GameforgeClient) -> None:
     print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
-def cmd_ws_stop(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_stop(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.workspace_stop(args.workspace_id)
     if args.json or not sys.stdout.isatty():
         print_json(data)
@@ -260,23 +260,23 @@ def cmd_ws_stop(args: argparse.Namespace, client: GameforgeClient) -> None:
     print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
-def cmd_ws_delete(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_delete(args: argparse.Namespace, client: DarkmageClient) -> None:
     client.workspace_delete(args.workspace_id)
     print(f"Workspace {args.workspace_id} deleted.")
 
 
-def cmd_ws_files(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_files(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.workspace_files(args.workspace_id, args.path))
 
 
-def cmd_ws_read(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_read(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.workspace_file_content(
         args.workspace_id, args.path, args.offset, args.limit
     )
     print(data.get("content", ""))
 
 
-def cmd_ws_edit(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_edit(args: argparse.Namespace, client: DarkmageClient) -> None:
     content = args.content
     if content == "-":
         content = sys.stdin.read()
@@ -291,11 +291,11 @@ def cmd_ws_edit(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_ws_search(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_search(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.workspace_search(args.workspace_id, args.query, args.path))
 
 
-def cmd_ws_download(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_download(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Download file from workspace to local filesystem."""
     result = client.workspace_file_download(
         args.workspace_id, args.remote_path, args.local_path
@@ -309,7 +309,7 @@ def cmd_ws_download(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_ws_upload(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_upload(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Upload local file to workspace."""
     result = client.workspace_file_upload(
         args.local_path, args.workspace_id, args.remote_path
@@ -323,7 +323,7 @@ def cmd_ws_upload(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_ws_tree(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_tree(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Show directory tree for workspace."""
     if args.json:
         result = _tree_to_dict(client, args.workspace_id, args.path, 0, args.depth)
@@ -337,11 +337,11 @@ def cmd_ws_tree(args: argparse.Namespace, client: GameforgeClient) -> None:
 # Simplified bidirectional file operations (cp / mv / rm / export / status)
 # ---------------------------------------------------------------------------
 
-def cmd_files_cp(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_cp(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Copy a file between local filesystem and workspace.
 
-    gameforge files cp local.txt ws:/remote/path.txt   (local -> workspace)
-    gameforge files cp ws:/remote/path.txt local.txt   (workspace -> local)
+    darkmage files cp local.txt ws:/remote/path.txt   (local -> workspace)
+    darkmage files cp ws:/remote/path.txt local.txt   (workspace -> local)
     """
     src = args.source
     dst = args.destination
@@ -372,7 +372,7 @@ def cmd_files_cp(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_error("Specify exactly one side as ws:/path (e.g. ws:/src/main.gd)")
 
 
-def cmd_files_mv(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_mv(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Move a file between local filesystem and workspace (copy + delete source)."""
     src = args.source
     dst = args.destination
@@ -400,7 +400,7 @@ def cmd_files_mv(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_error("Specify exactly one side as ws:/path")
 
 
-def cmd_files_rm(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_rm(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Remove a file from workspace or local filesystem."""
     target = args.path
     if target.startswith("ws:"):
@@ -416,9 +416,9 @@ def cmd_files_rm(args: argparse.Namespace, client: GameforgeClient) -> None:
             print_error(f"File not found: {target}")
 
 
-def cmd_files_export(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_export(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Download the entire workspace as a ZIP archive."""
-    out = args.output or f"gameforge-{args.workspace_id[:8]}.zip"
+    out = args.output or f"darkmage-{args.workspace_id[:8]}.zip"
     # The endpoint streams the ZIP; save it locally.
     resp = client._request("GET", f"/workspaces/{args.workspace_id}/export.zip")
     client._raise_for_status(resp)
@@ -432,7 +432,7 @@ def cmd_files_export(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_error(f"Cannot write {out}: {exc}")
 
 
-def cmd_files_status(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_status(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Show sync status between local directory and workspace."""
     local_dir = Path(args.path or ".").resolve()
     patterns = sync_mod.load_ignore_patterns(local_dir)
@@ -471,7 +471,7 @@ def cmd_files_status(args: argparse.Namespace, client: GameforgeClient) -> None:
         print()
 
 
-def cmd_files_sync_pull(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_sync_pull(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Pull files from workspace to local directory."""
     local_dir = Path(args.path or ".").resolve()
     patterns = sync_mod.load_ignore_patterns(local_dir)
@@ -490,7 +490,7 @@ def cmd_files_sync_pull(args: argparse.Namespace, client: GameforgeClient) -> No
             print(f"     - {e}")
 
 
-def cmd_files_sync_push(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_sync_push(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Push files from local directory to workspace."""
     local_dir = Path(args.path or ".").resolve()
     patterns = sync_mod.load_ignore_patterns(local_dir)
@@ -509,7 +509,7 @@ def cmd_files_sync_push(args: argparse.Namespace, client: GameforgeClient) -> No
             print(f"     - {e}")
 
 
-def cmd_files_sync_diff(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_sync_diff(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Show differences between local directory and workspace."""
     local_dir = Path(args.path or ".").resolve()
     patterns = sync_mod.load_ignore_patterns(local_dir)
@@ -535,7 +535,7 @@ def cmd_files_sync_diff(args: argparse.Namespace, client: GameforgeClient) -> No
             print(f"   ? {rel}")
 
 
-def cmd_files_sync_watch(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_sync_watch(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Watch local directory and push changes to workspace automatically."""
     local_dir = Path(args.path or ".").resolve()
     patterns = sync_mod.load_ignore_patterns(local_dir)
@@ -545,7 +545,7 @@ def cmd_files_sync_watch(args: argparse.Namespace, client: GameforgeClient) -> N
     )
 
 
-def cmd_files_sync_resolve(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_files_sync_resolve(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Resolve a conflict by choosing local or workspace version."""
     rel_path = args.path
     if args.wins == "local":
@@ -569,7 +569,7 @@ def cmd_files_sync_resolve(args: argparse.Namespace, client: GameforgeClient) ->
 
 
 def _tree_to_dict(
-    client: GameforgeClient,
+    client: DarkmageClient,
     workspace_id: str,
     path: str,
     depth: int,
@@ -578,7 +578,7 @@ def _tree_to_dict(
     """Build a nested dict representation of the workspace tree."""
     try:
         data = client.workspace_files(workspace_id, path)
-    except GameforgeError:
+    except DarkmageError:
         return {"path": path, "error": "Cannot list directory"}
     entries = cast(list, data.get("entries", []))
     entries_list: list = []
@@ -602,7 +602,7 @@ def _tree_to_dict(
 
 
 def _print_tree(
-    client: GameforgeClient,
+    client: DarkmageClient,
     workspace_id: str,
     path: str,
     prefix: str,
@@ -612,7 +612,7 @@ def _print_tree(
     """Recursively print directory tree."""
     try:
         data = client.workspace_files(workspace_id, path)
-    except GameforgeError as exc:
+    except DarkmageError as exc:
         print(f"{prefix}❌ {path} (error: {exc})")
         return
     entries = data.get("entries", [])
@@ -633,7 +633,7 @@ def _print_tree(
             print(f"{prefix}{connector}📄 {entry['name']}{size_str}")
 
 
-def cmd_ws_build_apk(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_build_apk(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Build a debug Android APK from the workspace's web files."""
     print_json(
         client.workspace_build_apk(
@@ -647,7 +647,7 @@ def cmd_ws_build_apk(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_ws_export_godot(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_export_godot(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Export a Godot 4 project to a Web build."""
     print_json(
         client.workspace_export_godot(
@@ -658,7 +658,7 @@ def cmd_ws_export_godot(args: argparse.Namespace, client: GameforgeClient) -> No
     )
 
 
-def cmd_ws_blender(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_blender(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Convert a .blend file to .glb for Godot via runner-manager."""
     print_json(
         client.workspace_blender(
@@ -671,7 +671,7 @@ def cmd_ws_blender(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_ws_godot_tests(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_godot_tests(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Run Godot Unit Test (GUT) tests headless via runner-manager."""
     print_json(
         client.workspace_godot_tests(
@@ -682,7 +682,7 @@ def cmd_ws_godot_tests(args: argparse.Namespace, client: GameforgeClient) -> Non
     )
 
 
-def cmd_ws_tiled_import(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_tiled_import(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Import a Tiled .tmx map into a Godot .tscn scene via runner-manager."""
     print_json(
         client.workspace_tiled_import(
@@ -693,7 +693,7 @@ def cmd_ws_tiled_import(args: argparse.Namespace, client: GameforgeClient) -> No
     )
 
 
-def cmd_ws_ldtk_import(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ws_ldtk_import(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Import an LDtk .ldtk project into a Godot .tscn scene via runner-manager."""
     print_json(
         client.workspace_ldtk_import(
@@ -704,11 +704,11 @@ def cmd_ws_ldtk_import(args: argparse.Namespace, client: GameforgeClient) -> Non
     )
 
 
-def cmd_session_create(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_session_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.session_create(args.workspace_id, args.title))
 
 
-def cmd_session_list(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_session_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.session_list(args.workspace_id, args.limit))
 
 
@@ -791,7 +791,7 @@ def _format_event(ev: dict) -> str:
     return f"[{eid}] {etype}: {data}"
 
 
-def cmd_run_create(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(
         client.run_create(
             args.session_id,
@@ -804,7 +804,7 @@ def cmd_run_create(args: argparse.Namespace, client: GameforgeClient) -> None:
     )
 
 
-def cmd_run_get(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_get(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.run_get(args.run_id)
     if args.json or not sys.stdout.isatty():
         print_json(data)
@@ -822,31 +822,31 @@ def cmd_run_get(args: argparse.Namespace, client: GameforgeClient) -> None:
         print(f"Завершён:   {data.get('finished_at')}")
 
 
-def cmd_run_message(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_message(args: argparse.Namespace, client: DarkmageClient) -> None:
     text = args.text
     if text == "-":
         text = sys.stdin.read().strip()
     print_json(client.run_message(args.run_id, text))
 
 
-def cmd_run_answer(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_answer(args: argparse.Namespace, client: DarkmageClient) -> None:
     answers = args.answer if isinstance(args.answer, list) else [args.answer]
     print_json(client.run_answer(args.run_id, args.question_id, answers))
 
 
-def cmd_run_context(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_context(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.run_context(args.run_id))
 
 
-def cmd_run_revert(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_revert(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.run_revert(args.run_id))
 
 
-def cmd_run_review(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_review(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.run_review(args.run_id))
 
 
-def cmd_run_list(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     runs = client.run_list(args.workspace_id)
     if args.json or not sys.stdout.isatty():
         print_json(runs)
@@ -865,7 +865,7 @@ def cmd_run_list(args: argparse.Namespace, client: GameforgeClient) -> None:
         print("Нет ran.")
 
 
-def cmd_run_stop(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_stop(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.run_stop(args.run_id)
     if args.json or not sys.stdout.isatty():
         print_json(data)
@@ -874,7 +874,7 @@ def cmd_run_stop(args: argparse.Namespace, client: GameforgeClient) -> None:
     print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
-def cmd_run_events(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> None:
     last_id = args.last_event_id
     pretty = args.pretty
     for ev in client.run_events_parsed(args.run_id, last_id):
@@ -887,7 +887,7 @@ def cmd_run_events(args: argparse.Namespace, client: GameforgeClient) -> None:
             break
 
 
-def cmd_process_start(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_process_start(args: argparse.Namespace, client: DarkmageClient) -> None:
     argv = args.argv
     print_json(
         client.process_start(
@@ -896,17 +896,17 @@ def cmd_process_start(args: argparse.Namespace, client: GameforgeClient) -> None
     )
 
 
-def cmd_process_output(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_process_output(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(
         client.process_output(args.workspace_id, args.process_id)
     )
 
 
-def cmd_process_stop(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_process_stop(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.process_stop(args.workspace_id, args.process_id))
 
 
-def cmd_payment_create(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_payment_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.payment_create(args.product, args.amount_rub)
     link = data.get("payment_link")
     code = data.get("code")
@@ -923,7 +923,7 @@ def cmd_payment_create(args: argparse.Namespace, client: GameforgeClient) -> Non
     print_json(data)
 
 
-def cmd_payment_list(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_payment_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     payments = client.payment_list()
     for p in payments:
         print(
@@ -934,7 +934,7 @@ def cmd_payment_list(args: argparse.Namespace, client: GameforgeClient) -> None:
         print("Платежей нет.")
 
 
-def cmd_admin_status(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_admin_status(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.admin_status()
     balance = data.get("openrouter_balance_usd")
     low = data.get("openrouter_balance_low")
@@ -950,7 +950,7 @@ def cmd_admin_status(args: argparse.Namespace, client: GameforgeClient) -> None:
             print(f"  Порог низкого баланса: ${low_threshold} USD")
 
 
-def cmd_term(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Интерактивный терминал workspace (PTY через runner-manager)."""
     import asyncio
     import os
@@ -1047,7 +1047,7 @@ def cmd_term(args: argparse.Namespace, client: GameforgeClient) -> None:
             pass
 
 
-def cmd_tui(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_tui(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Запустить полноценный TUI клиент (Textual)."""
     from .tui import run_tui
 
@@ -1131,17 +1131,17 @@ def print_help_repl() -> None:
 
   exit / quit / q                                 Выйти из интерактивного режима
 """)
-def cmd_repl(args: argparse.Namespace, client: GameforgeClient) -> None:
-    """Интерактивный режим REPL для работы с Gameforge AI."""
+def cmd_repl(args: argparse.Namespace, client: DarkmageClient) -> None:
+    """Интерактивный режим REPL для работы с Darkmage AI."""
     import readline
     import shlex
 
-    print("🚀 Gameforge CLI — Интерактивный режим (REPL)")
+    print("🚀 Darkmage CLI — Интерактивный режим (REPL)")
     print("Введите команду или 'help' для справки, 'exit' или 'quit' для выхода.\n")
 
     while True:
         try:
-            user_input = input("gameforge> ").strip()
+            user_input = input("darkmage> ").strip()
         except (EOFError, KeyboardInterrupt):
             print("\n👋 До свидания!")
             return
@@ -1175,11 +1175,11 @@ def cmd_repl(args: argparse.Namespace, client: GameforgeClient) -> None:
                 func(sub_args, client)
         except SystemExit:
             pass
-        except GameforgeError as exc:
+        except DarkmageError as exc:
             print_error(str(exc))
 
 
-def cmd_config_show(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_config_show(args: argparse.Namespace, client: DarkmageClient) -> None:
     from .config import load_config
     from .security import CONFIG_FILE
 
@@ -1197,7 +1197,7 @@ def cmd_config_show(args: argparse.Namespace, client: GameforgeClient) -> None:
         print(f"  {key}: {value}")
 
 
-def cmd_config_set(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_config_set(args: argparse.Namespace, client: DarkmageClient) -> None:
     from .config import load_config, set_base_url, set_runner_token, set_runner_url, set_token
 
     changed = False
@@ -1221,7 +1221,7 @@ def cmd_config_set(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_json(load_config())
 
 
-def cmd_config_export(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_config_export(args: argparse.Namespace, client: DarkmageClient) -> None:
     import json
 
     from .config import load_config
@@ -1238,7 +1238,7 @@ def cmd_config_export(args: argparse.Namespace, client: GameforgeClient) -> None
         print(f"Ошибка записи файла: {exc}")
 
 
-def cmd_config_import(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_config_import(args: argparse.Namespace, client: DarkmageClient) -> None:
     import json
 
 
@@ -1252,7 +1252,7 @@ def cmd_config_import(args: argparse.Namespace, client: GameforgeClient) -> None
     print(f"Конфиг импортирован из {args.input}")
 
 
-def cmd_history(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_history(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Показать или повторить предыдущие команды CLI."""
     import json
 
@@ -1286,7 +1286,7 @@ def cmd_history(args: argparse.Namespace, client: GameforgeClient) -> None:
             print(f"  {i + 1:>3}. {entry['command']}")
 
 
-def cmd_parallel(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_parallel(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Выполнить несколько команд параллельно."""
     import asyncio
     import shlex
@@ -1296,12 +1296,12 @@ def cmd_parallel(args: argparse.Namespace, client: GameforgeClient) -> None:
         try:
             parts = shlex.split(cmd_str)
             old_argv = sys.argv
-            sys.argv = ["gameforge"] + parts
+            sys.argv = ["darkmage"] + parts
             try:
                 sub_parser = build_parser()
                 sub_args = sub_parser.parse_args(parts)
                 func = sub_args.func
-                sub_client = GameforgeClient(base_url=sub_args.url)
+                sub_client = DarkmageClient(base_url=sub_args.url)
                 try:
                     func(sub_args, sub_client)
                 finally:
@@ -1332,19 +1332,19 @@ def cmd_parallel(args: argparse.Namespace, client: GameforgeClient) -> None:
     asyncio.run(run_all())
 
 
-def cmd_git_clone(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_git_clone(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.git_clone(args.workspace_id, args.url, args.ref, args.depth))
 
 
-def cmd_git_commit(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_git_commit(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.git_commit(args.workspace_id, args.message, args.branch))
 
 
-def cmd_git_push(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_git_push(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.git_push(args.workspace_id, args.branch))
 
 
-def cmd_git_pr_create(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_git_pr_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(
         client.git_pr_create(
             args.workspace_id, args.title, args.body, args.base, args.head
@@ -1352,11 +1352,11 @@ def cmd_git_pr_create(args: argparse.Namespace, client: GameforgeClient) -> None
     )
 
 
-def cmd_mcp_list(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_mcp_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.mcp_list())
 
 
-def cmd_mcp_call(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_mcp_call(args: argparse.Namespace, client: DarkmageClient) -> None:
     arguments: dict[str, Any] = {}
     if args.arguments:
         for item in args.arguments:
@@ -1367,7 +1367,7 @@ def cmd_mcp_call(args: argparse.Namespace, client: GameforgeClient) -> None:
     print_json(client.mpc_call(args.tool, arguments, args.workspace_id))
 
 
-def cmd_chat(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_chat(args: argparse.Namespace, client: DarkmageClient) -> None:
     messages = [{"role": "user", "content": args.message}]
     if args.system:
         messages.insert(0, {"role": "system", "content": args.system})
@@ -1379,17 +1379,17 @@ def cmd_chat(args: argparse.Namespace, client: GameforgeClient) -> None:
         print_json(data["usage"])
 
 
-def cmd_health(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_health(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.health())
 
 
-def cmd_ready(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_ready(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.ready())
 
 
-def cmd_doctor(args: argparse.Namespace, client: GameforgeClient) -> None:
-    """Проверка окружения и подключения к серверу Gameforge."""
-    print("🩺 Проверка состояния Gameforge CLI\n")
+def cmd_doctor(args: argparse.Namespace, client: DarkmageClient) -> None:
+    """Проверка окружения и подключения к серверу Darkmage."""
+    print("🩺 Проверка состояния Darkmage CLI\n")
 
     # 1. Конфигурация
     config = load_config()
@@ -1423,10 +1423,10 @@ def cmd_doctor(args: argparse.Namespace, client: GameforgeClient) -> None:
         print(f"   ❌ /ready:   ошибка — {exc}")
 
     print()
-    print("Готово к работе." if config.get("base_url") and config.get("token") else "⚠️  Настройте URL и токен через 'gameforge config set'.")
+    print("Готово к работе." if config.get("base_url") and config.get("token") else "⚠️  Настройте URL и токен через 'darkmage config set'.")
 
 
-def cmd_completion(args: argparse.Namespace, client: GameforgeClient) -> None:
+def cmd_completion(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Генерация скриптов автодополнения для shell (bash, zsh, fish)."""
     shell = args.shell if hasattr(args, "shell") and args.shell else "bash"
 
@@ -1442,16 +1442,16 @@ def cmd_completion(args: argparse.Namespace, client: GameforgeClient) -> None:
 
 
 def _bash_completion_script() -> str:
-    return """# Gameforge CLI bash completion
+    return """# Darkmage CLI bash completion
 # Source this file in your ~/.bashrc:
-#   source <(gameforge completion bash)
+#   source <(darkmage completion bash)
 
-_gameforge_complete() {
+_darkmage_complete() {
     local cur prev words cword
     _init_completion || return
 
     case "$prev" in
-        gameforge)
+        darkmage)
             COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run process payment admin term tui config git mcp chat health ready doctor completion' -- "$cur") )
             ;;
         auth)
@@ -1489,17 +1489,17 @@ _gameforge_complete() {
             ;;
     esac
 }
-complete -F _gameforge_complete gameforge"""
+complete -F _darkmage_complete darkmage"""
 
 
 def _zsh_completion_script() -> str:
-    return """# Gameforge CLI zsh completion
+    return """# Darkmage CLI zsh completion
 # Source this file in your ~/.zshrc:
-#   source <(gameforge completion zsh)
+#   source <(darkmage completion zsh)
 
-#compdef gameforge
+#compdef darkmage
 
-_gameforge_complete() {
+_darkmage_complete() {
     local -a commands
     commands=(
         'auth:Authentication commands'
@@ -1527,63 +1527,63 @@ _gameforge_complete() {
     _describe 'command' commands
 }
 
-_gameforge "$@"
+_darkmage "$@"
 """
 
 
 def _fish_completion_script() -> str:
-    return """# Gameforge CLI fish completion
-# Save this file to ~/.config/fish/completions/gameforge.fish
+    return """# Darkmage CLI fish completion
+# Save this file to ~/.config/fish/completions/darkmage.fish
 
-complete -c gameforge -f -a 'auth' -d 'Authentication commands'
-complete -c gameforge -f -a 'me' -d 'Current user info'
-complete -c gameforge -f -a 'usage' -d 'Spend windows'
-complete -c gameforge -f -a 'memory' -d 'User memory management'
-complete -c gameforge -f -a 'workspace' -d 'Workspace management'
-complete -c gameforge -f -a 'files' -d 'Workspace files'
-complete -c gameforge -f -a 'session' -d 'Session management'
-complete -c gameforge -f -a 'run' -d 'Task runs management'
-complete -c gameforge -f -a 'process' -d 'Background processes'
-complete -c gameforge -f -a 'payment' -d 'Payments and billing'
-complete -c gameforge -f -a 'admin' -d 'Admin commands'
-complete -c gameforge -f -a 'term' -d 'Interactive terminal (PTY)'
-complete -c gameforge -f -a 'tui' -d 'Full TUI client'
-complete -c gameforge -f -a 'config' -d 'Configuration management'
-complete -c gameforge -f -a 'git' -d 'Git operations'
-complete -c gameforge -f -a 'mcp' -d 'MCP tools'
-complete -c gameforge -f -a 'chat' -d 'Chat completion'
-complete -c gameforge -f -a 'health' -d 'Liveness check'
-complete -c gameforge -f -a 'ready' -d 'Readiness check'
-complete -c gameforge -f -a 'doctor' -d 'Environment diagnostics'
-complete -c gameforge -f -a 'completion' -d 'Shell completion scripts'
+complete -c darkmage -f -a 'auth' -d 'Authentication commands'
+complete -c darkmage -f -a 'me' -d 'Current user info'
+complete -c darkmage -f -a 'usage' -d 'Spend windows'
+complete -c darkmage -f -a 'memory' -d 'User memory management'
+complete -c darkmage -f -a 'workspace' -d 'Workspace management'
+complete -c darkmage -f -a 'files' -d 'Workspace files'
+complete -c darkmage -f -a 'session' -d 'Session management'
+complete -c darkmage -f -a 'run' -d 'Task runs management'
+complete -c darkmage -f -a 'process' -d 'Background processes'
+complete -c darkmage -f -a 'payment' -d 'Payments and billing'
+complete -c darkmage -f -a 'admin' -d 'Admin commands'
+complete -c darkmage -f -a 'term' -d 'Interactive terminal (PTY)'
+complete -c darkmage -f -a 'tui' -d 'Full TUI client'
+complete -c darkmage -f -a 'config' -d 'Configuration management'
+complete -c darkmage -f -a 'git' -d 'Git operations'
+complete -c darkmage -f -a 'mcp' -d 'MCP tools'
+complete -c darkmage -f -a 'chat' -d 'Chat completion'
+complete -c darkmage -f -a 'health' -d 'Liveness check'
+complete -c darkmage -f -a 'ready' -d 'Readiness check'
+complete -c darkmage -f -a 'doctor' -d 'Environment diagnostics'
+complete -c darkmage -f -a 'completion' -d 'Shell completion scripts'
 
 # Subcommand completions
-complete -c gameforge -f -a 'register login logout' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
-complete -c gameforge -f -a 'create list get update start stop delete' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
-complete -c gameforge -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
-complete -c gameforge -f -a 'create list' -d 'session subcommands' -n '__fish_seen_subcommand session'
-complete -c gameforge -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
-complete -c gameforge -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
-complete -c gameforge -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
-complete -c gameforge -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
-complete -c gameforge -f -a 'list call' -d 'mcp subcommands' -n '__fish_seen_subcommand mcp'
-complete -c gameforge -f -a 'show set export import' -d 'config subcommands' -n '__fish_seen_subcommand config'
+complete -c darkmage -f -a 'register login logout' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
+complete -c darkmage -f -a 'create list get update start stop delete' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
+complete -c darkmage -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
+complete -c darkmage -f -a 'create list' -d 'session subcommands' -n '__fish_seen_subcommand session'
+complete -c darkmage -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
+complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
+complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
+complete -c darkmage -f -a 'list call' -d 'mcp subcommands' -n '__fish_seen_subcommand mcp'
+complete -c darkmage -f -a 'show set export import' -d 'config subcommands' -n '__fish_seen_subcommand config'
 """
 
 
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
-        prog="gameforge",
-        description="CLI for the Gameforge AI platform",
+        prog="darkmage",
+        description="CLI for the Darkmage AI platform",
     )
     parser.add_argument(
-        "--url", default=None, help="API base URL (default: GAMEFORGE_API_URL or http://localhost:8000)"
+        "--url", default=None, help="API base URL (default: DARKMAGE_API_URL or http://localhost:8000)"
     )
     parser.add_argument(
-        "--runner-url", default=None, help="Runner-manager URL (default: GAMEFORGE_RUNNER_URL or http://localhost:8090)"
+        "--runner-url", default=None, help="Runner-manager URL (default: DARKMAGE_RUNNER_URL or http://localhost:8090)"
     )
     parser.add_argument(
-        "--runner-token", default=None, help="Runner-manager bearer token (default: GAMEFORGE_RUNNER_TOKEN)"
+        "--runner-token", default=None, help="Runner-manager bearer token (default: DARKMAGE_RUNNER_TOKEN)"
     )
     parser.add_argument(
         "--verbose",
@@ -1732,7 +1732,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = files_sub.add_parser("export", help="Download entire workspace as ZIP")
     p.add_argument("workspace_id")
-    p.add_argument("--output", "-o", default=None, help="Output ZIP path (default: gameforge-<id>.zip)")
+    p.add_argument("--output", "-o", default=None, help="Output ZIP path (default: darkmage-<id>.zip)")
     p.set_defaults(func=cmd_files_export)
 
     p = files_sub.add_parser("status", help="Show sync status (local vs workspace)")
@@ -1798,7 +1798,7 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--web-dir", default=".", help="Directory with web files inside workspace (default: .)")
     p.add_argument("--output", default="android/app-debug.apk", help="Output .apk path inside workspace")
     p.add_argument("--app-name", default="", help="Application name (max 30 chars)")
-    p.add_argument("--app-id", default=None, help="Application ID (default: app.gameforge.p<workspace_id_hex>)")
+    p.add_argument("--app-id", default=None, help="Application ID (default: app.darkmage.p<workspace_id_hex>)")
     p.add_argument("--version-code", type=int, default=1, help="Version code (default: 1)")
     p.set_defaults(func=cmd_ws_build_apk)
 
@@ -1983,7 +1983,7 @@ def build_parser() -> argparse.ArgumentParser:
     tui.set_defaults(func=cmd_tui)
 
     # config
-    config = sub.add_parser("config", help="Управление конфигом (~/.gameforge-cli/config.json)")
+    config = sub.add_parser("config", help="Управление конфигом (~/.darkmage-cli/config.json)")
     config_sub = config.add_subparsers(dest="config_command", required=True)
 
     p = config_sub.add_parser("show", help="Показать текущий конфиг")
@@ -1992,7 +1992,7 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = config_sub.add_parser("set", help="Установить параметры конфига")
     p.add_argument("--url", default=None, help="API base URL")
-    p.add_argument("--token", default=None, help="Bearer auth token (security: prefer GAMEFORGE_TOKEN env var)")
+    p.add_argument("--token", default=None, help="Bearer auth token (security: prefer DARKMAGE_TOKEN env var)")
     p.add_argument("--runner-url", default=None, help="Runner-manager URL")
     p.add_argument("--runner-token", default=None, help="Runner-manager bearer token")
     p.add_argument(
@@ -2120,10 +2120,10 @@ def _mask_password(command: str) -> str:
             skip_next = True
             continue
         masked.append(part)
-    # `gameforge login <email> <password>`: mask the last positional argument.
+    # `darkmage login <email> <password>`: mask the last positional argument.
     if len(parts) >= 3 and parts[0] == "login":
         masked[-1] = "***"
-    # `gameforge auth register ... --password <value>` is already masked above via --password.
+    # `darkmage auth register ... --password <value>` is already masked above via --password.
     return " ".join(masked)
 
 
@@ -2131,7 +2131,7 @@ def main(argv: list[str] | None = None) -> int:
     parser = build_parser()
     args = parser.parse_args(argv)
 
-    client = GameforgeClient(base_url=args.url)
+    client = DarkmageClient(base_url=args.url)
     if args.runner_url:
         client.runner_url = args.runner_url.rstrip("/")
     if args.runner_token:
@@ -2165,7 +2165,7 @@ def main(argv: list[str] | None = None) -> int:
         history = history[-100:]
         with open(history_file, "w", encoding="utf-8") as f:
             json.dump(history, f, ensure_ascii=False, indent=2)
-    except GameforgeError as exc:
+    except DarkmageError as exc:
         if getattr(args, "verbose", False):
             import traceback
 

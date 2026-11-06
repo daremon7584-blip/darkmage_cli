@@ -1,4 +1,4 @@
-"""Tests for gameforge-cli Phase 1 commands.
+"""Tests for darkmage-cli Phase 1 commands.
 
 All HTTP calls are mocked via unittest.mock.patch on httpx.Client.request
 and httpx.Client.get so no real network is used.
@@ -12,7 +12,7 @@ from unittest.mock import MagicMock, patch
 
 import pytest
 
-from gameforge_cli.client import GameforgeClient, GameforgeError, _image_mime
+from darkmage_cli.client import DarkmageClient, DarkmageError, _image_mime
 
 # ---------------------------------------------------------------------------
 # Helpers
@@ -48,7 +48,7 @@ def test_image_mime_webp():
 
 
 def test_image_mime_unknown():
-    with pytest.raises(GameforgeError):
+    with pytest.raises(DarkmageError):
         _image_mime(b"not an image")
 
 
@@ -57,10 +57,10 @@ def test_image_mime_unknown():
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_workspace_file_edit(mock_request):
     mock_request.return_value = _make_response(201, {"id": "123", "status": "waiting_approval"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.workspace_file_edit("ws-1", "app/main.py", "print('hi')", base_content="print('old')")
     assert result["id"] == "123"
     mock_request.assert_called_once()
@@ -72,7 +72,7 @@ def test_workspace_file_edit(mock_request):
     assert kwargs["json"]["base_content"] == "print('old')"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_workspace_file_edit_fetch_base(mock_request):
     # First call: fetch current content (GET files/content)
     # Second call: POST file-edits
@@ -80,17 +80,17 @@ def test_workspace_file_edit_fetch_base(mock_request):
         _make_response(200, {"content": "current content"}),
         _make_response(201, {"id": "456"}),
     ]
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.workspace_file_edit("ws-1", "app/main.py", "new content")
     assert result["id"] == "456"
     assert mock_request.call_count == 2
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_workspace_file_edit_error(mock_request):
     mock_request.return_value = _make_response(409, {"detail": "file changed"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
-    with pytest.raises(GameforgeError, match="409"):
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
+    with pytest.raises(DarkmageError, match="409"):
         client.workspace_file_edit("ws-1", "app/main.py", "content")
 
 
@@ -99,10 +99,10 @@ def test_workspace_file_edit_error(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_message(mock_request):
     mock_request.return_value = _make_response(202, {"id": "7"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_message("run-1", "additional context")
     assert result["id"] == "7"
     args, kwargs = mock_request.call_args
@@ -116,10 +116,10 @@ def test_run_message(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_revert(mock_request):
     mock_request.return_value = _make_response(200, {"status": "reverted", "checkpoint_status": "reverted"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_revert("run-1")
     assert result["status"] == "reverted"
     call_args, _kwargs = mock_request.call_args
@@ -132,10 +132,10 @@ def test_run_revert(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_review(mock_request):
     mock_request.return_value = _make_response(200, {"model": "anthropic/claude-haiku-5.5", "findings": [], "cost_usd": "0.0004"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_review("run-1")
     assert result["findings"] == []
     assert result["cost_usd"] == "0.0004"
@@ -149,12 +149,12 @@ def test_run_review(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_create_with_images(mock_request, tmp_path):
     img = tmp_path / "test.png"
     img.write_bytes(b"\x89PNG\r\n\x1a\nfake")
     mock_request.return_value = _make_response(202, {"id": "run-1", "image_count": 1})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_create("sess-1", "Make it blue", images=[str(img)])
     assert result["image_count"] == 1
     _args, kwargs = mock_request.call_args
@@ -166,19 +166,19 @@ def test_run_create_with_images(mock_request, tmp_path):
     assert decoded == b"\x89PNG\r\n\x1a\nfake"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_create_image_not_found(mock_request):
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
-    with pytest.raises(GameforgeError, match="Image not found"):
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
+    with pytest.raises(DarkmageError, match="Image not found"):
         client.run_create("sess-1", "prompt", images=["/nonexistent.png"])
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_create_image_unsupported(mock_request, tmp_path):
     img = tmp_path / "test.bmp"
     img.write_bytes(b"BM fake bmp")
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
-    with pytest.raises(GameforgeError, match="Unsupported image format"):
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
+    with pytest.raises(DarkmageError, match="Unsupported image format"):
         client.run_create("sess-1", "prompt", images=[str(img)])
 
 
@@ -187,10 +187,10 @@ def test_run_create_image_unsupported(mock_request, tmp_path):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_process_start(mock_request):
     mock_request.return_value = _make_response(201, {"process_id": "proc-1", "status": "started"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.process_start("ws-1", ["python", "app.py"], cwd="/workspace", port=8080)
     assert result["process_id"] == "proc-1"
     args, kwargs = mock_request.call_args
@@ -201,10 +201,10 @@ def test_process_start(mock_request):
     assert kwargs["json"]["port"] == 8080
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_process_output(mock_request):
     mock_request.return_value = _make_response(200, {"process_id": "proc-1", "output": "server running", "running": True})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.process_output("ws-1", "proc-1")
     assert result["output"] == "server running"
     args, kwargs = mock_request.call_args
@@ -213,20 +213,20 @@ def test_process_output(mock_request):
     assert kwargs["params"]["process_id"] == "proc-1"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_process_output_all(mock_request):
     mock_request.return_value = _make_response(200, {"processes": []})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.process_output("ws-1")
     assert result["processes"] == []
     _args, kwargs = mock_request.call_args
     assert kwargs["params"] == {}
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_process_stop(mock_request):
     mock_request.return_value = _make_response(200, {"process_id": "proc-1", "status": "stopped"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.process_stop("ws-1", "proc-1")
     assert result["status"] == "stopped"
     call_args, _kwargs = mock_request.call_args
@@ -239,10 +239,10 @@ def test_process_stop(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_answer(mock_request):
     mock_request.return_value = _make_response(200, {"question_id": "q1", "answers": ["yes"]})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_answer("run-1", "q1", ["yes"])
     assert result["answers"] == ["yes"]
     call_args, kwargs = mock_request.call_args
@@ -256,7 +256,7 @@ def test_run_answer(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_context(mock_request):
     mock_request.return_value = _make_response(200, {
         "run_id": "run-1",
@@ -266,7 +266,7 @@ def test_run_context(mock_request):
         "prompt_tokens": 1000,
         "completion_tokens": 500,
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.run_context("run-1")
     assert result["context_tokens"] == 5000
     assert result["context_limit"] == 96000
@@ -298,7 +298,7 @@ def _stream_lines(lines):
     return FakeResponse(lines)
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_run_events_parsed(mock_request):
     lines = [
         "id: 1",
@@ -318,7 +318,7 @@ def test_run_events_parsed(mock_request):
     ]
     fake_stream = _stream_lines(lines)
     mock_request.return_value = fake_stream
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     # Stream context manager is used; _request returns the fake response directly.
     client._client.stream = lambda method, url, headers=None: fake_stream
     events = list(client.run_events_parsed("run-1", last_event_id=0))
@@ -334,7 +334,7 @@ def test_run_events_parsed(mock_request):
 
 
 def test_format_event_assistant():
-    from gameforge_cli.cli import _format_event
+    from darkmage_cli.cli import _format_event
     ev = {"id": "5", "event": "assistant.delta", "data": {"text": "Hello world"}}
     line = _format_event(ev)
     assert "assistant.delta" in line
@@ -342,14 +342,14 @@ def test_format_event_assistant():
 
 
 def test_format_event_tool_requested():
-    from gameforge_cli.cli import _format_event
+    from darkmage_cli.cli import _format_event
     ev = {"id": "6", "event": "tool.requested", "data": {"name": "write_file", "arguments": {"path": "a.py"}}}
     line = _format_event(ev)
     assert "write_file" in line
 
 
 def test_color_non_tty(monkeypatch):
-    from gameforge_cli.cli import _RESET, _color
+    from darkmage_cli.cli import _RESET, _color
     monkeypatch.setattr(sys.stdout, "isatty", lambda: False)
     assert _color("text", "run.completed") == "text"
     assert _RESET == "\033[0m"
@@ -360,7 +360,7 @@ def test_color_non_tty(monkeypatch):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_payment_create_standard(mock_request):
     mock_request.return_value = _make_response(201, {
         "id": "pay-1",
@@ -371,7 +371,7 @@ def test_payment_create_standard(mock_request):
         "payment_link": "https://example.com/pay",
         "created_at": "2026-10-31T10:00:00Z",
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.payment_create("standard_30d")
     assert result["product"] == "standard_30d"
     assert result["amount_rub"] == 990
@@ -383,7 +383,7 @@ def test_payment_create_standard(mock_request):
     assert kwargs["json"].get("amount_rub") is None
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_payment_create_credits(mock_request):
     mock_request.return_value = _make_response(201, {
         "id": "pay-2",
@@ -393,7 +393,7 @@ def test_payment_create_credits(mock_request):
         "status": "pending",
         "payment_link": "https://example.com/pay",
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.payment_create("credits", amount_rub=1000)
     assert result["product"] == "credits"
     assert result["amount_rub"] == 1000
@@ -402,13 +402,13 @@ def test_payment_create_credits(mock_request):
     assert kwargs["json"]["amount_rub"] == 1000
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_payment_list(mock_request):
     mock_request.return_value = _make_response(200, [
         {"id": "pay-1", "product": "standard_30d", "amount_rub": 990, "status": "confirmed", "created_at": "2026-10-31T09:00:00Z"},
         {"id": "pay-2", "product": "credits", "amount_rub": 1000, "status": "pending", "created_at": "2026-10-31T10:00:00Z"},
     ])
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.payment_list()
     assert len(result) == 2
     assert result[0]["status"] == "confirmed"
@@ -423,14 +423,14 @@ def test_payment_list(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_admin_status(mock_request):
     mock_request.return_value = _make_response(200, {
         "openrouter_balance_usd": "12.50",
         "openrouter_balance_low_usd": "5.00",
         "openrouter_balance_low": False,
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.admin_status()
     assert result["openrouter_balance_usd"] == "12.50"
     assert result["openrouter_balance_low"] is False
@@ -439,14 +439,14 @@ def test_admin_status(mock_request):
     assert call_args[1] == "/admin/status"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_admin_status_low(mock_request):
     mock_request.return_value = _make_response(200, {
         "openrouter_balance_usd": "1.25",
         "openrouter_balance_low_usd": "5.00",
         "openrouter_balance_low": True,
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.admin_status()
     assert result["openrouter_balance_low"] is True
 
@@ -456,13 +456,13 @@ def test_admin_status_low(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_git_clone(mock_request):
     mock_request.return_value = _make_response(200, {
         "commit": "abc123",
         "url": "https://github.com/owner/repo.git",
     })
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.git_clone("ws-1", "https://github.com/owner/repo.git", ref="main", depth=1)
     assert result["commit"] == "abc123"
     call_args, kwargs = mock_request.call_args
@@ -473,10 +473,10 @@ def test_git_clone(mock_request):
     assert kwargs["json"]["depth"] == 1
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_git_commit(mock_request):
     mock_request.return_value = _make_response(200, {"commit": "def456", "branch": "main"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.git_commit("ws-1", "Add feature", branch="feature")
     assert result["commit"] == "def456"
     call_args, kwargs = mock_request.call_args
@@ -486,10 +486,10 @@ def test_git_commit(mock_request):
     assert kwargs["json"]["branch"] == "feature"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_git_push(mock_request):
     mock_request.return_value = _make_response(200, {"pushed": True, "branch": "main"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.git_push("ws-1", branch="main")
     assert result["pushed"] is True
     call_args, kwargs = mock_request.call_args
@@ -498,10 +498,10 @@ def test_git_push(mock_request):
     assert kwargs["json"]["branch"] == "main"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_git_pr_create(mock_request):
     mock_request.return_value = _make_response(200, {"pr_number": 42, "url": "https://github.com/owner/repo/pull/42"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.git_pr_create("ws-1", "Add feature", body="Description", base="main", head="feature")
     assert result["pr_number"] == 42
     call_args, kwargs = mock_request.call_args
@@ -518,10 +518,10 @@ def test_git_pr_create(mock_request):
 # ---------------------------------------------------------------------------
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_mcp_list(mock_request):
     mock_request.return_value = _make_response(200, {"tools": ["files.read", "files.write", "run.create"]})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.mcp_list()
     assert "files.read" in result["tools"]
     call_args, _kwargs = mock_request.call_args
@@ -529,10 +529,10 @@ def test_mcp_list(mock_request):
     assert call_args[1] == "/mcp/tools"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_mcp_call(mock_request):
     mock_request.return_value = _make_response(200, {"result": "ok", "tool": "files.read"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.mpc_call("files.read", {"path": "app/main.py"}, workspace_id="ws-1")
     assert result["result"] == "ok"
     call_args, kwargs = mock_request.call_args
@@ -543,10 +543,10 @@ def test_mcp_call(mock_request):
     assert kwargs["json"]["workspace_id"] == "ws-1"
 
 
-@patch("gameforge_cli.client.GameforgeClient._request")
+@patch("darkmage_cli.client.DarkmageClient._request")
 def test_mcp_call_no_workspace(mock_request):
     mock_request.return_value = _make_response(200, {"result": "ok", "tool": "files.read"})
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     result = client.mpc_call("files.read", {"path": "app/main.py"})
     assert result["result"] == "ok"
     _call_args, kwargs = mock_request.call_args
@@ -559,18 +559,18 @@ def test_mcp_call_no_workspace(mock_request):
 
 
 def test_config_show_json(capsys, monkeypatch, tmp_path):
-    from gameforge_cli.config import save_config
+    from darkmage_cli.config import save_config
 
     # Перенаправить конфиг во временную директорию
-    monkeypatch.setattr("gameforge_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
     save_config({"base_url": "http://example.com:8000", "token": "secret-token-12345"})
 
-    from gameforge_cli.cli import cmd_config_show
+    from darkmage_cli.cli import cmd_config_show
 
     class Args:
         json = True
 
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     cmd_config_show(Args(), client)
     captured = capsys.readouterr()
     assert "http://example.com:8000" in captured.out
@@ -578,56 +578,56 @@ def test_config_show_json(capsys, monkeypatch, tmp_path):
 
 
 def test_config_show_empty(capsys, monkeypatch, tmp_path):
-    from gameforge_cli.config import save_config
+    from darkmage_cli.config import save_config
 
-    monkeypatch.setattr("gameforge_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
     save_config({})
 
-    from gameforge_cli.cli import cmd_config_show
+    from darkmage_cli.cli import cmd_config_show
 
     class Args:
         json = False
 
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     cmd_config_show(Args(), client)
     captured = capsys.readouterr()
     assert "Конфиг пуст" in captured.out
 
 
 def test_config_set_url_and_token(monkeypatch, tmp_path):
-    from gameforge_cli.config import load_config, save_config
+    from darkmage_cli.config import load_config, save_config
 
-    monkeypatch.setattr("gameforge_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
     save_config({})
 
-    from gameforge_cli.cli import cmd_config_set
+    from darkmage_cli.cli import cmd_config_set
 
     class Args:
         url = "http://new-server:9000"
         verbose = False
 
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     cmd_config_set(Args(), client)
     cfg = load_config()
     assert cfg["base_url"] == "http://new-server:9000"
-    # Token should not be set via CLI argument (security: use GAMEFORGE_TOKEN env var instead)
+    # Token should not be set via CLI argument (security: use DARKMAGE_TOKEN env var instead)
     assert "token" not in cfg
 
 
 def test_config_set_no_changes(capsys, monkeypatch, tmp_path):
-    from gameforge_cli.config import save_config
+    from darkmage_cli.config import save_config
 
-    monkeypatch.setattr("gameforge_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
     save_config({})
 
-    from gameforge_cli.cli import cmd_config_set
+    from darkmage_cli.cli import cmd_config_set
 
     class Args:
         url = None
         token = None
         verbose = False
 
-    client = GameforgeClient(base_url="http://localhost:8000", token="test-token")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test-token")
     cmd_config_set(Args(), client)
     captured = capsys.readouterr()
     assert "Нечего менять" in captured.out

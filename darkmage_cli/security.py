@@ -1,9 +1,9 @@
 """
-Безопасное хранение конфигурации Gameforge CLI.
+Безопасное хранение конфигурации Darkmage CLI.
 
 Все чувствительные данные (токены, пароли) шифруются с помощью
 Fernet (AES-128 в режиме CBC с HMAC для проверки целостности).
-Ключ шифрования хранится в ~/.gameforge-cli/.key с правами доступа 0o600.
+Ключ шифрования хранится в ~/.darkmage-cli/.key с правами доступа 0o600.
 """
 
 from __future__ import annotations
@@ -15,7 +15,7 @@ from typing import Any
 
 from cryptography.fernet import Fernet
 
-CONFIG_DIR = Path.home() / ".gameforge-cli"
+CONFIG_DIR = Path.home() / ".darkmage-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 KEY_FILE = CONFIG_DIR / ".key"
 HISTORY_FILE = CONFIG_DIR / "history.json"
@@ -24,7 +24,7 @@ HISTORY_FILE = CONFIG_DIR / "history.json"
 def _get_or_create_key() -> bytes:
     """Создает или загружает ключ шифрования.
 
-    Ключ хранится в ~/.gameforge-cli/.key с правами доступа только для владельца (0o600).
+    Ключ хранится в ~/.darkmage-cli/.key с правами доступа только для владельца (0o600).
     """
     KEY_FILE.parent.mkdir(parents=True, exist_ok=True)
     if KEY_FILE.exists():

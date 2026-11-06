@@ -1,5 +1,5 @@
 """
-Пользовательские тесты Gameforge CLI (без реального API сервера).
+Пользовательские тесты Darkmage CLI (без реального API сервера).
 Проверяют:
 1. Корректность работы всех команд CLI
 2. Корректность аргументов и флагов
@@ -16,10 +16,10 @@ import sys
 import tempfile
 from pathlib import Path
 
-from gameforge_cli.cli import _color_status, _format_event
-from gameforge_cli.client import GameforgeClient
+from darkmage_cli.cli import _color_status, _format_event
+from darkmage_cli.client import DarkmageClient
 
-CLI = [sys.executable, "-m", "gameforge_cli.cli"]
+CLI = [sys.executable, "-m", "darkmage_cli.cli"]
 FAILURES = 0
 SUCCESSES = 0
 
@@ -113,9 +113,9 @@ def test_completion():
 def test_run_events_parsing():
     """Test run events parsing logic."""
     print("\n📡 Тест 5: Парсинг SSE событий")
-    from gameforge_cli.client import GameforgeClient
+    from darkmage_cli.client import DarkmageClient
 
-    GameforgeClient(base_url="http://localhost:8000", token="test")
+    DarkmageClient(base_url="http://localhost:8000", token="test")
 
     # Test _format_event
     event = {"id": "1", "event": "assistant.delta", "data": {"text": "Hello"}}
@@ -145,7 +145,7 @@ def test_client_methods():
     """Test client method signatures."""
     print("\n🔧 Тест 6: Клиентские методы")
 
-    client = GameforgeClient(base_url="http://localhost:8000", token="test")
+    client = DarkmageClient(base_url="http://localhost:8000", token="test")
 
     # Check all methods exist
     methods = [
@@ -192,7 +192,7 @@ def test_sync_module():
     """Test sync module functions."""
     print("\n🔄 Тест 8: Синхронизация файлов")
 
-    from gameforge_cli.sync import (
+    from darkmage_cli.sync import (
         load_ignore_patterns,
         should_ignore,
         sha256_of_file,
@@ -240,7 +240,7 @@ def test_sync_module():
         check("__pycache__/a.pyc ignored", "__pycache__/a.pyc" not in rel_paths)
 
     # SyncState dataclass
-    from gameforge_cli.sync import SyncState, FileEntry
+    from darkmage_cli.sync import SyncState, FileEntry
     state = SyncState()
     check("SyncState empty", len(state.local_files) == 0 and len(state.workspace_files) == 0)
     fe = FileEntry(path="test.txt", size_bytes=10, checksum="abc123")
@@ -249,7 +249,7 @@ def test_sync_module():
 
 if __name__ == "__main__":
     print("=" * 60)
-    print("🧪 Пользовательские тесты Gameforge CLI")
+    print("🧪 Пользовательские тесты Darkmage CLI")
     print("=" * 60)
 
     test_help()

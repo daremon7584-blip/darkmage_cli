@@ -1,7 +1,7 @@
 [project]
-name = "gameforge-cli"
+name = "darkmage-cli"
 version = "0.1.0"
-description = "Custom CLI for the Gameforge AI platform"
+description = "Custom CLI for the Darkmage AI platform"
 requires-python = ">=3.10"
 dependencies = [
     "httpx>=0.27",
@@ -10,7 +10,7 @@ dependencies = [
 ]
 
 [project.scripts]
-gameforge = "gameforge_cli.cli:main"
+darkmage = "darkmage_cli.cli:main"
 
 [build-system]
 requires = ["hatchling"]

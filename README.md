@@ -1,140 +1,140 @@
-# gameforge-cli
+# darkmage-cli
 
-Custom CLI for the [Gameforge AI](https://github.com/) platform (FastAPI backend at `/root/saas-backend`).
+Custom CLI for the [Darkmage AI](https://github.com/) platform (FastAPI backend at `/root/saas-backend`).
 
 ## Install
 
 ```bash
-cd /root/gameforge-cli
+cd /root/darkmage-cli
 pip install -e .
 ```
 
 ## Configure
 
 ```bash
-export GAMEFORGE_API_URL=http://your-server:8000   # default: http://localhost:8000
-export GAMEFORGE_TOKEN=...                         # bearer token for authentication
+export DARKMAGE_API_URL=http://your-server:8000   # default: http://localhost:8000
+export DARKMAGE_TOKEN=...                         # bearer token for authentication
 ```
 
-Token is encrypted and saved to `~/.gameforge-cli/config.json` after `gameforge auth login` or `gameforge auth interactive`. The token is encrypted at rest using Fernet (AES-128).
+Token is encrypted and saved to `~/.darkmage-cli/config.json` after `darkmage auth login` or `darkmage auth interactive`. The token is encrypted at rest using Fernet (AES-128).
 
-**Never pass the token via command line arguments** — it would be visible in process listings. Use `GAMEFORGE_TOKEN` environment variable instead.
+**Never pass the token via command line arguments** — it would be visible in process listings. Use `DARKMAGE_TOKEN` environment variable instead.
 
 ## Quick Start
 
 ```bash
 # 1. Настроить сервер
-gameforge config set --url http://localhost:8000
+darkmage config set --url http://localhost:8000
 
 # 2. Войти (интерактивно, как в Claude Code)
-gameforge login
+darkmage login
 
 # 3. Открыть интерактивный терминал (TUI)
-gameforge tui <workspace_id>
+darkmage tui <workspace_id>
 
 # Или всё в одной команде:
-gameforge start
+darkmage start
 ```
 
 ## Usage
 
 ```bash
-gameforge --help
-gameforge auth register --email a@b.c --password secret123 --full-name Name
-gameforge auth login --email a@b.c --password secret123
-gameforge auth logout
+darkmage --help
+darkmage auth register --email a@b.c --password secret123 --full-name Name
+darkmage auth login --email a@b.c --password secret123
+darkmage auth logout
 
-gameforge me
-gameforge usage
-gameforge memory get
-gameforge memory put "I prefer Python"
+darkmage me
+darkmage usage
+darkmage memory get
+darkmage memory put "I prefer Python"
 
-gameforge workspace create --name my-project
-gameforge workspace list
-gameforge workspace get <id>
-gameforge workspace start <id>
-gameforge workspace stop <id>
-gameforge workspace delete <id>
-gameforge workspace update <id> --name new --approval-mode ask
+darkmage workspace create --name my-project
+darkmage workspace list
+darkmage workspace get <id>
+darkmage workspace start <id>
+darkmage workspace stop <id>
+darkmage workspace delete <id>
+darkmage workspace update <id> --name new --approval-mode ask
 
-gameforge files list <id> [path]
-gameforge files read <id> <path> [--offset 1] [--limit 2000]
-gameforge files edit <id> <path> "new content" [--base-content "old"] [--session-id <sid>]
-gameforge files download <id> <remote_path> <local_path>
-gameforge files upload <local_path> <id> <remote_path>
-gameforge files tree <id> [path] [--depth N]
-gameforge files search <id> <query> [path]
+darkmage files list <id> [path]
+darkmage files read <id> <path> [--offset 1] [--limit 2000]
+darkmage files edit <id> <path> "new content" [--base-content "old"] [--session-id <sid>]
+darkmage files download <id> <remote_path> <local_path>
+darkmage files upload <local_path> <id> <remote_path>
+darkmage files tree <id> [path] [--depth N]
+darkmage files search <id> <query> [path]
 
-gameforge session create <workspace_id> [--title "Task"]
-gameforge session list <workspace_id>
+darkmage session create <workspace_id> [--title "Task"]
+darkmage session list <workspace_id>
 
-gameforge run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
-gameforge run get <run_id>
-gameforge run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)
-gameforge run message <run_id> "additional context"   # or read from stdin with '-'
-gameforge run answer <run_id> <question_id> "yes"      # answer an ask_user question
-gameforge run context <run_id>                         # show context token usage
-gameforge run revert <run_id>
-gameforge run review <run_id>
-gameforge run stop <run_id>
-gameforge run events <run_id> [--last-event-id N] [--pretty]
+darkmage run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
+darkmage run get <run_id>
+darkmage run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)
+darkmage run message <run_id> "additional context"   # or read from stdin with '-'
+darkmage run answer <run_id> <question_id> "yes"      # answer an ask_user question
+darkmage run context <run_id>                         # show context token usage
+darkmage run revert <run_id>
+darkmage run review <run_id>
+darkmage run stop <run_id>
+darkmage run events <run_id> [--last-event-id N] [--pretty]
 
-gameforge process start <workspace_id> <cmd> [args...] [--cwd /workspace] [--port 8080]
-gameforge process output <workspace_id> [process_id]
-gameforge process stop <workspace_id> <process_id>
+darkmage process start <workspace_id> <cmd> [args...] [--cwd /workspace] [--port 8080]
+darkmage process output <workspace_id> [process_id]
+darkmage process stop <workspace_id> <process_id>
 
-gameforge payment create [--product standard_30d|credits] [--amount-rub N]  # ссылка на сайт для оплаты
-gameforge payment list                                                       # список своих платежей
+darkmage payment create [--product standard_30d|credits] [--amount-rub N]  # ссылка на сайт для оплаты
+darkmage payment list                                                       # список своих платежей
 
-gameforge admin status                          # баланс OpenRouter (только админ)
-gameforge term <workspace_id>                   # интерактивный терминал (PTY, Phase 3)
+darkmage admin status                          # баланс OpenRouter (только админ)
+darkmage term <workspace_id>                   # интерактивный терминал (PTY, Phase 3)
 
-gameforge git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
-gameforge git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, бэкенд)
-gameforge git push <ws> [--branch main]                 # пуш (Phase 3, бэкенд)
-gameforge git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, бэкенд)
+darkmage git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
+darkmage git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, бэкенд)
+darkmage git push <ws> [--branch main]                 # пуш (Phase 3, бэкенд)
+darkmage git pr <ws> "заголовок" [--body текст] [--base main] [--head feature]  # PR (Phase 3, бэкенд)
 
 # APK / Godot (выполняются на runner-manager, порт 8090)
-gameforge workspace apk <workspace_id> [--web-dir DIR] [--output FILE.apk] [--app-name NAME] [--app-id ID] [--version-code N]
+darkmage workspace apk <workspace_id> [--web-dir DIR] [--output FILE.apk] [--app-name NAME] [--app-id ID] [--version-code N]
                                         # Собрать отладочный Android APK из веб-файлов workspace
-gameforge workspace godot <workspace_id> [--project-dir DIR] [--output-dir DIR]
+darkmage workspace godot <workspace_id> [--project-dir DIR] [--output-dir DIR]
                                         # Экспортировать Godot 4 проект в Web-билд
 
 # Конфиг runner-manager
-gameforge config set --runner-url http://localhost:8090   # URL runner-managera
-gameforge config set --runner-token <TOKEN>               # bearer токен runner-managера
-export GAMEFORGE_RUNNER_URL=http://localhost:8090         # или через env var
-export GAMEFORGE_RUNNER_TOKEN=<TOKEN>
+darkmage config set --runner-url http://localhost:8090   # URL runner-managera
+darkmage config set --runner-token <TOKEN>               # bearer токен runner-managера
+export DARKMAGE_RUNNER_URL=http://localhost:8090         # или через env var
+export DARKMAGE_RUNNER_TOKEN=<TOKEN>
 
-gameforge mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
-gameforge mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
+darkmage mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
+darkmage mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 
-gameforge config show [--json]              # показать конфиг (~/.gameforge-cli/config.json)
-gameforge config set [--url URL] [--verbose]
-gameforge config export <файл>              # экспорт конфига в JSON
-gameforge config import <файл>              # импорт конфига из JSON
-gameforge doctor                            # проверка окружения и подключения
-gameforge completion <bash|zsh|fish>        # генерация скриптов автодополнения
-gameforge history [N]                       # история команд (повторить команду N)
-gameforge history [N]                       # история команд (повторить команду N)
+darkmage config show [--json]              # показать конфиг (~/.darkmage-cli/config.json)
+darkmage config set [--url URL] [--verbose]
+darkmage config export <файл>              # экспорт конфига в JSON
+darkmage config import <файл>              # импорт конфига из JSON
+darkmage doctor                            # проверка окружения и подключения
+darkmage completion <bash|zsh|fish>        # генерация скриптов автодополнения
+darkmage history [N]                       # история команд (повторить команду N)
+darkmage history [N]                       # история команд (повторить команду N)
 
-gameforge tui <workspace_id> [--run-id <id>]  # Полноценный TUI клиент (Textual, Phase 3)
+darkmage tui <workspace_id> [--run-id <id>]  # Полноценный TUI клиент (Textual, Phase 3)
 
-gameforge chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 0.7] [--max-tokens 1000]
+darkmage chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 0.7] [--max-tokens 1000]
 
-gameforge health
-gameforge ready
+darkmage health
+darkmage ready
 ```
 
 ## Notes
 
-- All mutating commands require a bearer token (set via `gameforge auth login` or `GAMEFORGE_TOKEN`).
+- All mutating commands require a bearer token (set via `darkmage auth login` or `DARKMAGE_TOKEN`).
 - Run events use `text/event-stream` and are printed raw to stdout.
 - Errors print to stderr and exit non-zero.
 
 ## 🔒 Security
 
-- **Token encryption**: All tokens are encrypted at rest using Fernet (AES-128 with HMAC). The encryption key is stored in `~/.gameforge-cli/.key` with `0o600` permissions.
-- **No token in CLI args**: Never pass tokens via command-line arguments (they're visible in `ps aux`). Use `GAMEFORGE_TOKEN` environment variable instead.
-- **Config file permissions**: `~/.gameforge-cli/config.json` is stored with `0o600` permissions (owner read/write only).
+- **Token encryption**: All tokens are encrypted at rest using Fernet (AES-128 with HMAC). The encryption key is stored in `~/.darkmage-cli/.key` with `0o600` permissions.
+- **No token in CLI args**: Never pass tokens via command-line arguments (they're visible in `ps aux`). Use `DARKMAGE_TOKEN` environment variable instead.
+- **Config file permissions**: `~/.darkmage-cli/config.json` is stored with `0o600` permissions (owner read/write only).
 - **Never share your token**: Treat your bearer token like a password. Anyone with your token can access your workspaces.
