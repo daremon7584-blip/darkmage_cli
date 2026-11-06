@@ -1597,7 +1597,7 @@ def build_parser() -> argparse.ArgumentParser:
         default=False,
         help="Вывод в формате JSON",
     )
-    sub = parser.add_subparsers(dest="command", required=True)
+    sub = parser.add_subparsers(dest="command", required=False)
 
     def add(name: str, help_text: str, func, parent=sub) -> argparse.ArgumentParser:
         p = parent.add_parser(name, help=help_text)
@@ -2136,6 +2136,17 @@ def main(argv: list[str] | None = None) -> int:
         client.runner_url = args.runner_url.rstrip("/")
     if args.runner_token:
         client.runner_token = args.runner_token
+
+    # Если не указана команда — интерактивный вход как в Claude Code:
+    #   нет токена  → вход / регистрация
+    #   есть токен  → список рабочих зон и запуск TUI
+    if not getattr(args, "command", None):
+        config = load_config()
+        if config.get("token"):
+            return cmd_start(args, client)
+        else:
+            return cmd_auth_interactive(args, client)
+
     try:
         func = args.func
     except AttributeError:
