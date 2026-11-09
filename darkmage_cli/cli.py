@@ -144,12 +144,12 @@ def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
     client.token = token
     client.base_url = base_url or client.base_url
 
-    # Показываем рабочие зоны
-    print("\n📋 Ваши рабочие зоны:")
+    # Показываем рабочие зоны (на каждого пользователя одна)
+    print("\n📋 Ваша рабочая зона:")
     try:
         workspaces = client.workspace_list()
         if not workspaces:
-            print("   Рабочие зоны не найдены. Создайте новую: darkmage workspace create --name <имя>")
+            print("   Рабочих зон нет. Создайте сессию: darkmage session new")
             return
         for i, ws in enumerate(workspaces, 1):
             status = _color_status(ws.get("status", ""))
@@ -158,21 +158,23 @@ def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
         print(f"Ошибка получения рабочих зон: {exc}")
         return
 
-    # Выбор рабочей зоны
-    choice = input("\nВыберите рабочую зону (номер) или нажмите Enter для отмены: ").strip()
-    if not choice:
-        print("Отменено.")
-        return
-
-    try:
-        idx = int(choice) - 1
-        if idx < 0 or idx >= len(workspaces):
+    if len(workspaces) == 1:
+        # Одна зона на пользователя: выбирать нечего.
+        idx = 0
+    else:
+        choice = input("\nВыберите рабочую зону (номер) или нажмите Enter для отмены: ").strip()
+        if not choice:
+            print("Отменено.")
+            return
+        try:
+            idx = int(choice) - 1
+            if idx < 0 or idx >= len(workspaces):
+                print("Неверный номер.")
+                return
+        except ValueError:
             print("Неверный номер.")
             return
-        workspace_id = workspaces[idx]["id"]
-    except ValueError:
-        print("Неверный номер.")
-        return
+    workspace_id = workspaces[idx]["id"]
 
     # Запуск TUI
     print(f"\n🚀 Запуск рабочей зоны {workspaces[idx]['name']}...")
