@@ -412,6 +412,26 @@ def test_completion_scripts_include_new_commands(script):
         assert command in text
 
 
+@pytest.mark.parametrize(
+    ("script", "flags"),
+    [
+        (_bash_completion_script, ("--json", "--version", "--output-format", "--scope")),
+        (_zsh_completion_script, ("--json", "--version", "--output-format", "--scope")),
+        (_fish_completion_script, ("-l json", "-l version", "-l output-format", "-l scope")),
+    ],
+)
+def test_completion_scripts_include_new_global_and_subcommand_flags(script, flags):
+    text = script()
+    for flag in flags:
+        assert flag in text
+
+
+def test_zsh_completion_invokes_the_defined_function():
+    script = _zsh_completion_script()
+    assert "_darkmage()" in script
+    assert '_darkmage "$@"' in script
+
+
 def test_parser_registers_p2_commands():
     parser = build_parser()
     for command in ("approvals", "exec", "history", "parallel", "repl", "chat"):

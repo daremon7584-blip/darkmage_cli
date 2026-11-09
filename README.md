@@ -45,6 +45,10 @@ cat logs.txt | darkmage -p "найди причину"
 
 ```bash
 darkmage --help
+darkmage --version
+# --json is accepted before or after the subcommand
+darkmage --json config show
+darkmage config show --json
 darkmage auth register --email a@b.c --password secret123 --full-name Name
 darkmage auth login --email a@b.c --password secret123
 darkmage auth logout
