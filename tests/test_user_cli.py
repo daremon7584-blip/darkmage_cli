@@ -22,11 +22,26 @@ from darkmage_cli.client import DarkmageClient
 CLI = [sys.executable, "-m", "darkmage_cli.cli"]
 FAILURES = 0
 SUCCESSES = 0
+# Isolate every subprocess from the real ~/.darkmage-cli.
+TEST_HOME = tempfile.mkdtemp(prefix="darkmage-cli-test-home-")
 
 
-def run_cmd(args, expected_code=0):
+def run_cmd(args, expected_code=0, env=None):
     """Run CLI command and return (returncode, stdout, stderr)."""
-    result = subprocess.run(CLI + args, check=False, capture_output=True, text=True, timeout=10)
+    run_env = dict(os.environ)
+    run_env["HOME"] = TEST_HOME
+    run_env.pop("DARKMAGE_TOKEN", None)
+    run_env.pop("DARKMAGE_RUNNER_TOKEN", None)
+    if env:
+        run_env.update(env)
+    result = subprocess.run(
+        CLI + args,
+        check=False,
+        capture_output=True,
+        text=True,
+        timeout=10,
+        env=run_env,
+    )
     return result.returncode, result.stdout, result.stderr
 
 
@@ -68,18 +83,26 @@ def test_config():
         rc, out, err = run_cmd(["config", "show"])
         check("config show", rc == 0, f"rc={rc}")
         check("config show contains url", "http://test:8000" in out)
-        check("config show contains token", "test123" in out or "***" in out)
+        check("config show masks token", "test123" not in out and "***" in out)
 
         # Show JSON
         rc, out, err = run_cmd(["config", "show", "--json"])
         check("config show --json", rc == 0, f"rc={rc}")
-        check("config show --json is valid JSON", json.loads(out) is not None)
+        shown = json.loads(out)
+        check("config show --json redacts token", "test123" not in out)
 
         # Export
         export_file = os.path.join(tmpdir, "config.json")
         rc, out, err = run_cmd(["config", "export", export_file])
         check("config export", rc == 0, f"rc={rc}, err={err}")
         check("config export file exists", os.path.exists(export_file))
+        exported_text = Path(export_file).read_text(encoding="utf-8")
+        check("config export has no plaintext token", "test123" not in exported_text)
+        check(
+            "config export is 0600",
+            (os.stat(export_file).st_mode & 0o777) == 0o600,
+            oct(os.stat(export_file).st_mode),
+        )
 
         # Modify config
         run_cmd(["config", "set", "--url", "http://changed:9000"])
@@ -88,7 +111,16 @@ def test_config():
         rc, out, err = run_cmd(["config", "show", "--json"])
         data = json.loads(out)
         check("config import restored url", data.get("base_url") == "http://test:8000")
-        check("config import restored token", data.get("token") == "test123")
+        # A redacted import must not replace the live token with a placeholder.
+        encrypted = json.loads(
+            (Path(TEST_HOME) / ".darkmage-cli" / "config.json").read_text(encoding="utf-8")
+        )
+        check(
+            "config import kept live token",
+            shown.get("token") != "test123"
+            and encrypted.get("token", "").startswith("gAAAA"),
+            f"encrypted={encrypted.get('token', '')[:12]}",
+        )
 
 
 def test_doctor():

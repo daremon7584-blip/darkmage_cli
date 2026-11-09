@@ -34,6 +34,11 @@ darkmage tui <workspace_id>
 
 # Или всё в одной команде:
 darkmage start
+
+# One-shot без TUI: ответ в stdout, прогресс в stderr
+darkmage exec "почини тесты" --output-format text
+darkmage -p "объясни проект" --output-format json
+cat logs.txt | darkmage -p "найди причину"
 ```
 
 ## Usage
@@ -94,7 +99,7 @@ darkmage payment create [--product standard_30d|credits] [--amount-rub N]  # с�
 darkmage payment list                                                       # список своих платежей
 
 darkmage admin status                          # баланс OpenRouter (только админ)
-darkmage term <workspace_id>                   # интерактивный терминал (PTY, Phase 3)
+darkmage term <workspace_id>                   # безопасный relay к удалённому PTY (без локального shell)
 
 darkmage git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
 darkmage git commit <ws> "сообщение" [--branch feature]  # коммит (Phase 3, бэкенд)
@@ -116,9 +121,9 @@ export DARKMAGE_RUNNER_TOKEN=<TOKEN>
 darkmage mcp list                                       # список MCP-инструментов (Phase 3, нужен бэкенд)
 darkmage mcp call <tool> <workspace_id> ключ=значение ...  # вызов MCP-инструмента (Phase 3, нужен бэкенд)
 
-darkmage config show [--json]              # показать конфиг (~/.darkmage-cli/config.json)
+darkmage config show [--json]              # показать конфиг (секреты замаскированы)
 darkmage config set [--url URL] [--verbose]
-darkmage config export <файл>              # экспорт конфига в JSON
+darkmage config export <файл>              # экспорт без секретов, файл 0600
 darkmage config import <файл>              # импорт конфига из JSON
 darkmage doctor                            # проверка окружения и подключения
 darkmage completion <bash|zsh|fish>        # генерация скриптов автодополнения
@@ -144,4 +149,10 @@ darkmage ready
 - **Token encryption**: All tokens are encrypted at rest using Fernet (AES-128 with HMAC). The encryption key is stored in `~/.darkmage-cli/.key` with `0o600` permissions.
 - **No token in CLI args**: Never pass tokens via command-line arguments (they're visible in `ps aux`). Use `DARKMAGE_TOKEN` environment variable instead.
 - **Config file permissions**: `~/.darkmage-cli/config.json` is stored with `0o600` permissions (owner read/write only).
+- **No secret output**: `config show --json`, `config set --verbose`, and `config export` redact tokens; exports are written with mode `0600`.
+- **History**: secret flags are masked and `~/.darkmage-cli/history.json` is written with mode `0600`.
+- **Remote terminal**: `darkmage term` relays bytes to/from the remote PTY and never pipes remote output into a local shell.
+- **Installers**: server arguments are validated; `install.py` never uses `shell=True`; installers update an existing clone instead of `rm -rf`.
 - **Never share your token**: Treat your bearer token like a password. Anyone with your token can access your workspaces.
+
+See [SECURITY.md](SECURITY.md) for details and deferred installer supply-chain pinning.

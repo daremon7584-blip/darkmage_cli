@@ -5,23 +5,56 @@
 # Использование:
 #   python install.py <IP_СЕРВЕРА>
 #   или: python install.py --server 148.135.203.133
+#
+# Безопасность: команды запускаются списком argv (без shell=True), а адрес
+# сервера проверяется до подстановки в URL и строки конфига.
 # =============================================================================
 
 import argparse
 import os
+import re
+import shlex
 import subprocess
 import sys
 from pathlib import Path
 import urllib.request
 import urllib.error
 
+REPO_URL = "https://github.com/daremon7584-blip/darkmage_cli.git"
+REPO_DIRNAME = "darkmage_cli"
 
-def run(cmd: str, **kwargs) -> None:
-    """Запускает команду, выводя ошибку при неудаче."""
-    print(f"▶ {cmd}")
-    result = subprocess.run(cmd, shell=True, **kwargs)
+# Only a DNS name, IPv4 address, or `localhost` is accepted. This prevents
+# injecting shell/rc syntax or URL components through the server argument.
+_SERVER_RE = re.compile(
+    r"^(?=.{1,253}$)[A-Za-z0-9](?:[A-Za-z0-9.-]*[A-Za-z0-9])?$"
+)
+
+
+def validate_server(server: str) -> str:
+    """Validate the server host before it is used in URLs or shell rc lines."""
+    server = server.strip()
+    if (
+        not server
+        or len(server) > 253
+        or ".." in server
+        or server[0] in ".-"
+        or server[-1] in ".-"
+        or not _SERVER_RE.fullmatch(server)
+    ):
+        raise ValueError(
+            "Некорректный адрес сервера. Укажите только домен или IP "
+            "(буквы, цифры, точки и дефис), например 148.135.203.133"
+        )
+    return server
+
+
+def run(argv: list[str], cwd: Path | None = None) -> None:
+    """Run a command as an argv list (never through a shell)."""
+    argv = [str(part) for part in argv]
+    print(f"▶ {shlex.join(argv)}")
+    result = subprocess.run(argv, cwd=cwd, check=False)
     if result.returncode != 0:
-        print(f"❌ Команда не удалась: {cmd}")
+        print(f"❌ Команда не удалась: {shlex.join(argv)}")
         sys.exit(result.returncode)
 
 
@@ -40,7 +73,19 @@ def detect_python() -> str:
 def install_python_deps(python_cmd: str) -> None:
     """Устанавливает Python зависимости."""
     print("▶ Установка Python зависимостей...")
-    run(f"{python_cmd} -m pip install httpx textual websockets pydantic-settings")
+    run(
+        [
+            python_cmd,
+            "-m",
+            "pip",
+            "install",
+            "httpx",
+            "textual",
+            "websockets",
+            "pydantic-settings",
+            "cryptography",
+        ]
+    )
 
     # cryptography нужен для шифрования токена в конфиге.
     # В Termux с Python 3.14 пред собранное wheel может не совпадать с ABI
@@ -49,29 +94,60 @@ def install_python_deps(python_cmd: str) -> None:
     try:
         subprocess.run(
             [python_cmd, "-c", "from cryptography.fernet import Fernet"],
-            capture_output=True, check=True,
+            capture_output=True,
+            check=True,
         )
     except subprocess.CalledProcessError:
         print("▶ Пересборка cryptography из исходников (для совместимости с Python)...")
-        run(f"{python_cmd} -m pip install --force-reinstall --no-binary :all: cryptography")
+        run(
+            [
+                python_cmd,
+                "-m",
+                "pip",
+                "install",
+                "--force-reinstall",
+                "--no-binary",
+                ":all:",
+                "cryptography",
+            ]
+        )
+
+
+def _origin_matches(repo_dir: Path) -> bool:
+    result = subprocess.run(
+        ["git", "-C", str(repo_dir), "remote", "get-url", "origin"],
+        capture_output=True,
+        text=True,
+        check=False,
+    )
+    if result.returncode != 0:
+        return False
+    return result.stdout.strip().rstrip("/") == REPO_URL.rstrip("/")
 
 
 def clone_repo() -> Path:
-    """Клонирует репозиторий и возвращает путь к нему."""
-    home = Path.home()
-    repo_dir = home / "darkmage_cli"
+    """Клонирует или обновляет репозиторий, не удаляя пользовательские файлы."""
+    repo_dir = Path.home() / REPO_DIRNAME
     if repo_dir.exists():
-        import shutil
-        shutil.rmtree(repo_dir)
+        if not (repo_dir / ".git").is_dir() or not _origin_matches(repo_dir):
+            print(
+                f"❌ {repo_dir} уже существует, но это не клон {REPO_URL}.\n"
+                "   Переместите или удалите его вручную и запустите установку снова."
+            )
+            sys.exit(2)
+        print("▶ Обновление существующего клона darkmage_cli (git pull --ff-only)...")
+        run(["git", "-C", str(repo_dir), "pull", "--ff-only"])
+        return repo_dir
+
     print("▶ Клонирование darkmage_cli...")
-    run(f"git clone https://github.com/daremon7584-blip/darkmage_cli.git \"{repo_dir}\"")
+    run(["git", "clone", REPO_URL, str(repo_dir)])
     return repo_dir
 
 
 def install_cli(python_cmd: str, repo_dir: Path) -> None:
     """Устанавливает CLI как команду."""
     print("▶ Установка команды darkmage...")
-    run(f'cd "{repo_dir}" && {python_cmd} -m pip install -e .')
+    run([python_cmd, "-m", "pip", "install", "-e", "."], cwd=repo_dir)
 
 
 def write_config(server: str) -> None:
@@ -122,6 +198,12 @@ def main() -> None:
         print("   Пример: python install.py 148.135.203.133")
         print("")
         sys.exit(1)
+
+    try:
+        server = validate_server(server)
+    except ValueError as exc:
+        print(f"❌ {exc}")
+        sys.exit(2)
 
     print("╔════════════════════════════════════════════════════════════════════╗")
     print("║  🧙‍♂️  Darkmage AI CLI — установка                                ║")

@@ -2,14 +2,36 @@
 # =============================================================================
 # Darkmage AI CLI — универсальный установщик (Linux / macOS / Termux / WSL)
 # =============================================================================
-# Использование:
-#   curl -sSL https://raw.githubusercontent.com/daremon7584-blip/darkmage_cli/main/install.sh | bash -s -- <IP_СЕРВЕРА>
-#   или: DARKMAGE_SERVER=148.135.203.133 curl -sSL ... | bash
+# Использование (предпочтительно — из проверенного локального checkout):
+#   bash install.sh <IP_СЕРВЕРА>
+#   или: DARKMAGE_SERVER=148.135.203.133 ./install.sh
+#
+# `curl | bash` остаётся совместимым, но не проверяет checksum скрипта:
+# полный supply-chain pinning отложен (см. SECURITY.md).
 # =============================================================================
 
 set -e
 
+REPO_URL="https://github.com/daremon7584-blip/darkmage_cli.git"
+REPO_DIR="$HOME/darkmage_cli"
 SERVER="${1:-${DARKMAGE_SERVER:-}}"
+
+validate_server() {
+    case "$1" in
+        "")
+            echo "❌ Пустой адрес сервера." >&2
+            exit 2
+            ;;
+        *[!A-Za-z0-9.-]*|.*|-*|*.|*..*)
+            echo "❌ Некорректный адрес сервера: разрешены только буквы, цифры, точки и дефис." >&2
+            exit 2
+            ;;
+    esac
+    if [ "${#1}" -gt 253 ]; then
+        echo "❌ Слишком длинный адрес сервера." >&2
+        exit 2
+    fi
+}
 
 if [ -z "$SERVER" ]; then
     echo "╔════════════════════════════════════════════════════════════════════╗"
@@ -21,6 +43,14 @@ if [ -z "$SERVER" ]; then
     echo "   Пример: curl -sSL ... | bash -s -- 148.135.203.133"
     echo ""
     exit 1
+fi
+
+validate_server "$SERVER"
+
+# Internal safe test hook: validates input without installing anything.
+if [ "${DARKMAGE_INSTALL_DRY_RUN:-0}" = "1" ]; then
+    echo "✅ Server validation passed: $SERVER"
+    exit 0
 fi
 
 echo "╔════════════════════════════════════════════════════════════════════╗"
@@ -60,9 +90,9 @@ install_python_pkgs() {
     fi
 
     # Устанавливаем зависимости
-    "$PY" -m pip install --quiet httpx textual websockets pydantic-settings || \
-        pip install --quiet httpx textual websockets pydantic-settings || \
-        "$PY" -m pip install httpx textual websockets pydantic-settings
+    "$PY" -m pip install --quiet httpx textual websockets pydantic-settings cryptography || \
+        pip install --quiet httpx textual websockets pydantic-settings cryptography || \
+        "$PY" -m pip install httpx textual websockets pydantic-settings cryptography
 
     # cryptography нужен для шифрования токена в конфиге.
     # В Termux с Python 3.14 пред собранное wheel может не совпадать с ABI
@@ -120,12 +150,24 @@ case "$OS" in
         ;;
 esac
 
-# --- Клонируем репозиторий ---
-echo "▶ Клонирование darkmage_cli..."
-cd ~
-rm -rf darkmage_cli
-git clone https://github.com/daremon7584-blip/darkmage_cli.git
-cd darkmage_cli
+# --- Клонируем или обновляем репозиторий (без удаления каталога) ---
+echo "▶ Клонирование/обновление darkmage_cli..."
+if [ -e "$REPO_DIR" ]; then
+    if [ ! -d "$REPO_DIR/.git" ]; then
+        echo "❌ $REPO_DIR уже существует, но это не git-клон." >&2
+        echo "   Переместите или удалите его вручную и запустите установку снова." >&2
+        exit 2
+    fi
+    ORIGIN="$(git -C "$REPO_DIR" remote get-url origin 2>/dev/null || true)"
+    if [ "$ORIGIN" != "$REPO_URL" ]; then
+        echo "❌ $REPO_DIR указывает на другой remote: ${ORIGIN:-<none>}" >&2
+        exit 2
+    fi
+    git -C "$REPO_DIR" pull --ff-only
+else
+    git clone "$REPO_URL" "$REPO_DIR"
+fi
+cd "$REPO_DIR"
 
 # --- Устанавливаем CLI ---
 echo "▶ Установка команды darkmage..."

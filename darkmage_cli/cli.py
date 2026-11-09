@@ -4,12 +4,23 @@ import argparse
 import getpass
 import json
 import os
+import shlex
 import sys
+from datetime import datetime
 from pathlib import Path
-from typing import Any, cast
+from typing import Any, Awaitable, Callable, cast
 
 from .client import DarkmageClient, DarkmageError, print_error, print_json
 from .config import get_token, load_config, save_config
+from .security import (
+    is_redacted_value,
+    is_secret_key,
+    mask_token,
+    redact_config,
+    strip_redacted,
+    write_private_json,
+    write_private_text,
+)
 from . import sync as sync_mod
 
 
@@ -62,7 +73,7 @@ def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> No
     # Проверяем, уже есть ли токен
     config = load_config()
     if config.get("token") and config.get("base_url"):
-        print(f"Вы уже вошли как токен: {config['token'][:8]}...")
+        print(f"Вы уже вошли как токен: {mask_token(config['token'])}")
         print("Используйте 'darkmage auth logout' для выхода.")
         return
 
@@ -922,6 +933,179 @@ def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> None:
             break
 
 
+_EXEC_TERMINAL_EVENTS = {
+    "run.completed": "completed",
+    "run.failed": "failed",
+    "run.cancelled": "cancelled",
+}
+
+
+def _resolve_exec_session(client: DarkmageClient, session_id: str | None) -> str:
+    """Use the requested session, or the newest one (creating one if needed)."""
+    if session_id:
+        return session_id
+    try:
+        sessions = client.session_all(limit=1)
+        if sessions:
+            return str(sessions[0]["id"])
+        return str(client.session_new(title="CLI exec")["id"])
+    except DarkmageError:
+        workspaces = client.workspace_list(limit=1)
+        if not workspaces:
+            raise DarkmageError(
+                "Нет доступных сессий. Создайте: darkmage session new"
+            ) from None
+        return str(
+            client.session_create(str(workspaces[0]["id"]), title="CLI exec")["id"]
+        )
+
+
+def _question_text(data: dict[str, Any]) -> str:
+    questions = data.get("questions")
+    if isinstance(questions, list) and questions:
+        parts = []
+        for item in questions:
+            if isinstance(item, dict):
+                parts.append(
+                    str(item.get("question") or item.get("text") or item)
+                )
+            else:
+                parts.append(str(item))
+        return "; ".join(parts)
+    return str(data.get("question") or "")
+
+
+def cmd_exec(args: argparse.Namespace, client: DarkmageClient) -> int:
+    """One-shot run: create -> follow SSE -> final answer on stdout."""
+    prompt = " ".join(getattr(args, "prompt", None) or []).strip()
+    if not prompt or prompt == "-":
+        prompt = sys.stdin.read().strip()
+    if not prompt:
+        print("Error: пустой prompt (передайте текст или stdin)", file=sys.stderr)
+        return 2
+
+    output_format = getattr(args, "output_format", None) or (
+        "json" if getattr(args, "json", False) else "text"
+    )
+    if output_format not in ("text", "json", "stream-json"):
+        print(f"Error: неизвестный output format: {output_format}", file=sys.stderr)
+        return 2
+
+    try:
+        session_id = _resolve_exec_session(client, getattr(args, "session_id", None))
+        run = client.run_create(
+            session_id,
+            prompt,
+            model=getattr(args, "model", None),
+            plan_only=getattr(args, "plan_only", False),
+        )
+    except DarkmageError as exc:
+        print_error(str(exc))
+
+    run_id = str(run.get("id") or run.get("run_id") or "")
+    if not run_id:
+        print("Error: сервер не вернул run id", file=sys.stderr)
+        return 1
+
+    if output_format != "stream-json":
+        print(f"▶ run {run_id}", file=sys.stderr, flush=True)
+
+    answer_parts: list[str] = []
+    status = "unknown"
+    interrupted = False
+
+    try:
+        for event in client.run_events_parsed(run_id):
+            event_type = str(event.get("event", ""))
+            data = event.get("data") or {}
+            if not isinstance(data, dict):
+                data = {"value": data}
+
+            if event_type == "assistant.delta":
+                answer_parts.append(str(data.get("text") or ""))
+            elif event_type == "tool.requested":
+                # Text before a tool call is progress, not the final answer.
+                answer_parts.clear()
+
+            if output_format == "stream-json":
+                print(
+                    json.dumps(event, ensure_ascii=False, default=str),
+                    flush=True,
+                )
+            elif event_type != "assistant.delta":
+                print(_format_event(event), file=sys.stderr, flush=True)
+
+            if event_type == "approval.required":
+                status = "approval_required"
+                interrupted = True
+                print(
+                    "Approval required. Follow the run with "
+                    f"'darkmage run events {run_id}' or approve it in the UI.",
+                    file=sys.stderr,
+                )
+                break
+            if event_type == "agent.question":
+                status = "question"
+                interrupted = True
+                print(
+                    "Agent question: "
+                    + (_question_text(data) or "(empty)")
+                    + f"\nAnswer it with 'darkmage run answer {run_id} <question_id> ...'",
+                    file=sys.stderr,
+                )
+                break
+            if event_type in _EXEC_TERMINAL_EVENTS:
+                status = _EXEC_TERMINAL_EVENTS[event_type]
+                break
+    except DarkmageError as exc:
+        print(f"Error: {exc}", file=sys.stderr)
+        status = "failed"
+
+    run_data: dict[str, Any] = {}
+    try:
+        fetched = client.run_get(run_id)
+        if isinstance(fetched, dict):
+            run_data = fetched
+    except DarkmageError:
+        pass
+    if status in ("unknown", "running") and run_data.get("status"):
+        status = str(run_data["status"])
+
+    final_answer = "".join(answer_parts).strip()
+    output_last = getattr(args, "output_last_message", None)
+    if output_last and final_answer:
+        try:
+            write_private_text(output_last, final_answer + "\n")
+        except OSError as exc:
+            print(f"Warning: не удалось записать {output_last}: {exc}", file=sys.stderr)
+
+    envelope = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "session_id": session_id,
+        "status": status,
+        "result": final_answer,
+        "usage": {
+            "prompt_tokens": run_data.get("prompt_tokens"),
+            "completion_tokens": run_data.get("completion_tokens"),
+        },
+        "last_event_sequence": run_data.get("last_event_sequence"),
+    }
+
+    if output_format == "json":
+        print_json(envelope)
+    elif output_format == "text" and final_answer and status == "completed":
+        print(final_answer)
+
+    if status == "completed":
+        return 0
+    if status in ("approval_required", "question"):
+        return 4
+    if interrupted:
+        return 4
+    return 1
+
+
 def cmd_process_start(args: argparse.Namespace, client: DarkmageClient) -> None:
     argv = args.argv
     print_json(
@@ -985,14 +1169,114 @@ def cmd_admin_status(args: argparse.Namespace, client: DarkmageClient) -> None:
             print(f"  Порог низкого баланса: ${low_threshold} USD")
 
 
-def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
-    """Интерактивный терминал workspace (PTY через runner-manager)."""
+async def _relay_terminal(
+    ws: Any,
+    read_stdin: Callable[[], Awaitable[bytes]],
+    write_stdout: Callable[[bytes], Any],
+) -> None:
+    """Relay bytes between a remote PTY WebSocket and local stdio.
+
+    Remote output is written verbatim to stdout. It is never interpreted by a
+    local shell, so a compromised workspace cannot execute code on the client.
+    Ctrl-] (0x1d) detaches locally, telnet-style.
+    """
     import asyncio
-    import os
-    import pty
-    import select
-    import subprocess
-    import sys
+
+    async def stdin_to_ws() -> None:
+        while True:
+            try:
+                data = await read_stdin()
+            except (EOFError, OSError):
+                break
+            if not data:
+                break
+            marker = data.find(b"\x1d")
+            if marker >= 0:
+                if marker:
+                    await ws.send(data[:marker])
+                break
+            await ws.send(data)
+        await ws.close()
+
+    async def ws_to_stdout() -> None:
+        async for message in ws:
+            if isinstance(message, str):
+                message = message.encode("utf-8", errors="replace")
+            write_stdout(message)
+
+    stdin_task = asyncio.create_task(stdin_to_ws())
+    ws_task = asyncio.create_task(ws_to_stdout())
+    await asyncio.wait({stdin_task, ws_task}, return_when=asyncio.FIRST_COMPLETED)
+
+    if stdin_task.done():
+        # The user detached (Ctrl-] or EOF): flush pending remote output, then stop.
+        try:
+            await asyncio.wait_for(asyncio.shield(ws_task), timeout=0.2)
+        except asyncio.TimeoutError:
+            ws_task.cancel()
+    else:
+        stdin_task.cancel()
+
+    await asyncio.gather(stdin_task, ws_task, return_exceptions=True)
+
+    for task in (stdin_task, ws_task):
+        if not task.cancelled():
+            task.result()
+
+
+def _make_stdin_reader(fd: int) -> tuple[Callable[[], Awaitable[bytes]], Callable[[], None]]:
+    """Create a non-blocking stdin reader backed by the asyncio event loop."""
+    import asyncio
+
+    loop = asyncio.get_running_loop()
+    queue: asyncio.Queue[bytes] = asyncio.Queue()
+
+    def on_readable() -> None:
+        try:
+            data = os.read(fd, 4096)
+        except OSError:
+            data = b""
+        if not data:
+            loop.remove_reader(fd)
+        queue.put_nowait(data)
+
+    loop.add_reader(fd, on_readable)
+
+    async def read() -> bytes:
+        return await queue.get()
+
+    def close() -> None:
+        try:
+            loop.remove_reader(fd)
+        except Exception:  # noqa: S110, BLE001
+            pass
+
+    return read, close
+
+
+def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
+    """Интерактивный терминал workspace (PTY через runner-manager).
+
+    Безопасный relay: ввод уходит в удалённый PTY, вывод пишется в stdout.
+    Локальный shell не создаётся и удалённый вывод не исполняется.
+    """
+    if os.name != "posix":
+        print(
+            "Команда term доступна только на Unix (Linux/macOS/WSL). "
+            "На Windows используйте TUI: darkmage tui <workspace_id>",
+            file=sys.stderr,
+        )
+        return
+
+    if not sys.stdin.isatty() or not sys.stdout.isatty():
+        print(
+            "term требует интерактивный TTY. Для скриптов используйте "
+            "darkmage run create/run events.",
+            file=sys.stderr,
+        )
+        return
+
+    import asyncio
     import termios
     import tty
 
@@ -1000,80 +1284,42 @@ def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
 
     result = client.pty_create(args.workspace_id)
     session_id = result["session_id"]
-    print(f"PTY session {session_id}. Ctrl-D or 'exit' to quit.\n", end="")
+    print(f"PTY session {session_id}. Выход: 'exit' или Ctrl-].\n", end="")
 
-    master_fd, slave_fd = pty.openpty()
-    proc = subprocess.Popen(
-        ["sh"],
-        stdin=slave_fd,
-        stdout=slave_fd,
-        stderr=slave_fd,
-        close_fds=True,
+    ws_url = (
+        client.base_url.replace("http://", "ws://")
+        .replace("https://", "wss://")
+        + f"/workspaces/{args.workspace_id}/pty/{session_id}"
     )
-    os.close(slave_fd)
+    extra_headers = (
+        {"Authorization": f"Bearer {client.token}"} if client.token else None
+    )
+    stdin_fd = sys.stdin.fileno()
+    old_settings = termios.tcgetattr(stdin_fd)
 
-    old_settings = termios.tcgetattr(sys.stdin.fileno())
+    async def run() -> None:
+        async with websockets.connect(ws_url, additional_headers=extra_headers) as ws:
+            read_stdin, close_reader = _make_stdin_reader(stdin_fd)
+
+            def write_stdout(data: bytes) -> None:
+                sys.stdout.buffer.write(data)
+                sys.stdout.buffer.flush()
+
+            try:
+                await _relay_terminal(ws, read_stdin, write_stdout)
+            finally:
+                close_reader()
 
     try:
-        tty.setraw(sys.stdin.fileno())
-        os.set_blocking(master_fd, False)
-
-        ws_url = (
-            client.base_url.replace("http://", "ws://")
-            .replace("https://", "wss://")
-            + f"/workspaces/{args.workspace_id}/pty/{session_id}"
-        )
-
-        extra_headers = (
-            {"Authorization": f"Bearer {client.token}"} if client.token else None
-        )
-
-        async def run():
-            async with websockets.connect(ws_url, additional_headers=extra_headers) as ws:
-                loop = asyncio.get_event_loop()
-
-                async def pty_to_ws():
-                    while True:
-                        await asyncio.sleep(0.01)
-                        r, _, _ = await loop.run_in_executor(
-                            None, select.select, [master_fd], [], [], 0
-                        )
-                        if r:
-                            try:
-                                data = await loop.run_in_executor(
-                                    None, os.read, master_fd, 4096
-                                )
-                                if not data:
-                                    break
-                                await ws.send(data)
-                            except OSError:
-                                break
-
-                async def ws_to_pty():
-                    try:
-                        while True:
-                            data = await ws.recv()
-                            if isinstance(data, bytes):
-                                os.write(master_fd, data)
-                            else:
-                                os.write(master_fd, data.encode())
-                    except (websockets.ConnectionClosed, Exception):  # noqa: S110, BLE001
-                        pass
-
-                await asyncio.gather(pty_to_ws(), ws_to_pty())
-
+        tty.setraw(stdin_fd)
         asyncio.run(run())
+    except KeyboardInterrupt:
+        pass
+    except Exception as exc:  # noqa: BLE001
+        print(f"term: {exc}", file=sys.stderr)
     finally:
         try:
-            os.close(master_fd)
-        except Exception:  # noqa: S110, BLE001
-            pass
-        try:
-            proc.terminate()
-        except Exception:  # noqa: S110, BLE001
-            pass
-        try:
-            termios.tcsetattr(sys.stdin.fileno(), termios.TCSADRAIN, old_settings)
+            termios.tcsetattr(stdin_fd, termios.TCSADRAIN, old_settings)
         except Exception:  # noqa: S110, BLE001
             pass
         try:
@@ -1220,15 +1466,16 @@ def cmd_config_show(args: argparse.Namespace, client: DarkmageClient) -> None:
 
     config = load_config()
     if args.json:
-        print_json(config)
+        # Never print the decrypted token, even when CI captures stdout.
+        print_json(redact_config(config))
         return
     if not config:
         print("Конфиг пуст. Файл: " + str(CONFIG_FILE))
         return
     print(f"Конфиг ({CONFIG_FILE}):")
     for key, value in config.items():
-        if key == "token" and value:
-            value = value[:8] + "…" + value[-4:] if len(value) > 12 else "***"
+        if value and is_secret_key(key):
+            value = mask_token(str(value))
         print(f"  {key}: {value}")
 
 
@@ -1253,12 +1500,10 @@ def cmd_config_set(args: argparse.Namespace, client: DarkmageClient) -> None:
         return
     print("Конфиг обновлён.")
     if getattr(args, "verbose", False):
-        print_json(load_config())
+        print_json(redact_config(load_config()))
 
 
 def cmd_config_export(args: argparse.Namespace, client: DarkmageClient) -> None:
-    import json
-
     from .config import load_config
 
     config = load_config()
@@ -1266,9 +1511,12 @@ def cmd_config_export(args: argparse.Namespace, client: DarkmageClient) -> None:
         print("Конфиг пуст, нечего экспортировать.")
         return
     try:
-        with open(args.output, "w", encoding="utf-8") as f:
-            json.dump(config, f, ensure_ascii=False, indent=2)
-        print(f"Конфиг экспортирован в {args.output}")
+        # Exports are always redacted and owner-read/write only.
+        write_private_json(args.output, redact_config(config))
+        print(
+            f"Конфиг экспортирован в {args.output} "
+            "(секреты замаскированы, права 0600)"
+        )
     except OSError as exc:
         print(f"Ошибка записи файла: {exc}")
 
@@ -1276,13 +1524,30 @@ def cmd_config_export(args: argparse.Namespace, client: DarkmageClient) -> None:
 def cmd_config_import(args: argparse.Namespace, client: DarkmageClient) -> None:
     import json
 
-
     try:
         with open(args.input, "r", encoding="utf-8") as f:
             config = json.load(f)
     except (OSError, json.JSONDecodeError) as exc:
         print(f"Ошибка чтения файла: {exc}")
         return
+    if not isinstance(config, dict):
+        print("Ошибка: ожидается JSON-объект.")
+        return
+    # A redacted export must not overwrite a live token with a placeholder.
+    redacted_keys = [
+        key
+        for key, value in config.items()
+        if is_secret_key(str(key)) and is_redacted_value(value)
+    ]
+    config = strip_redacted(config)
+    if not config:
+        print("В файле нет данных для импорта (все секреты замаскированы).")
+        return
+    if redacted_keys:
+        current = load_config()
+        for key in redacted_keys:
+            if current.get(key):
+                config[key] = current[key]
     save_config(config)
     print(f"Конфиг импортирован из {args.input}")
 
@@ -1291,9 +1556,9 @@ def cmd_history(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Показать или повторить предыдущие команды CLI."""
     import json
 
-    from .security import CONFIG_DIR
+    from .security import HISTORY_FILE
 
-    history_file = CONFIG_DIR / "history.json"
+    history_file = HISTORY_FILE
     try:
         with open(history_file, "r", encoding="utf-8") as f:
             history = json.load(f)
@@ -1611,6 +1876,7 @@ def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="darkmage",
         description="CLI for the Darkmage AI platform",
+        epilog="One-shot: darkmage -p '...' is shorthand for darkmage exec '...'",
     )
     parser.add_argument(
         "--url", default=None, help="API base URL (default: DARKMAGE_API_URL or http://localhost:8000)"
@@ -2030,6 +2296,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = admin_sub.add_parser("status", help="Статус сервера и баланс OpenRouter")
     p.set_defaults(func=cmd_admin_status)
 
+    # exec (-p is normalized to this command in main)
+    p = sub.add_parser("exec", help="One-shot: создать run, дождаться ответа")
+    p.add_argument(
+        "prompt",
+        nargs="*",
+        help="Текст промпта; пусто или '-' — читать stdin",
+    )
+    p.add_argument("--session", dest="session_id", default=None, help="ID сессии")
+    p.add_argument(
+        "--output-format",
+        dest="output_format",
+        choices=["text", "json", "stream-json"],
+        default=None,
+        help="text (ответ), json (envelope) или stream-json (события)",
+    )
+    p.add_argument(
+        "-o",
+        "--output-last-message",
+        dest="output_last_message",
+        default=None,
+        help="Записать финальный ответ в файл (0600)",
+    )
+    p.add_argument("--model", default=None, help="Модель или alias")
+    p.add_argument("--plan-only", action="store_true", default=False)
+    p.set_defaults(func=cmd_exec)
+
     # term
     term = sub.add_parser("term", help="Интерактивный терминал workspace (PTY)")
     term.add_argument("workspace_id")
@@ -2164,31 +2456,95 @@ def build_parser() -> argparse.ArgumentParser:
     return parser
 
 
-def _mask_password(command: str) -> str:
-    """Hide passwords in saved history so they are not stored in plain text."""
-    parts = command.split()
+_SECRET_FLAGS = (
+    "--password",
+    "-p",
+    "--token",
+    "--runner-token",
+    "--api-key",
+    "--apikey",
+    "--secret",
+    "--client-secret",
+    "--refresh-token",
+    "--access-token",
+    "--auth-token",
+    "--bearer",
+)
+
+
+def _mask_secrets(command: str) -> str:
+    """Hide secret flag values and login passwords in saved history."""
+    try:
+        parts = shlex.split(command)
+    except ValueError:
+        parts = command.split()
+
     masked: list[str] = []
-    skip_next = False
-    for index, part in enumerate(parts):
-        if skip_next:
-            masked.append("***")
-            skip_next = False
-            continue
-        if part in ("--password", "-p"):
+    index = 0
+    while index < len(parts):
+        part = parts[index]
+        if part in _SECRET_FLAGS:
             masked.append(part)
-            skip_next = True
+            if index + 1 < len(parts):
+                masked.append("***")
+                index += 2
+            else:
+                index += 1
             continue
-        masked.append(part)
-    # `darkmage login <email> <password>`: mask the last positional argument.
+        name, separator, _value = part.partition("=")
+        if separator and name in _SECRET_FLAGS:
+            masked.append(f"{name}=***")
+        else:
+            masked.append(part)
+        index += 1
+
+    # `darkmage login <email> <password>` / `darkmage auth login ...`.
     if len(parts) >= 3 and parts[0] == "login":
         masked[-1] = "***"
-    # `darkmage auth register ... --password <value>` is already masked above via --password.
+    if len(parts) >= 4 and parts[0] == "auth" and parts[1] == "login":
+        masked[-1] = "***"
     return " ".join(masked)
 
 
+# Backwards-compatible name for callers/tests that used the old helper.
+_mask_password = _mask_secrets
+
+
+def _record_history(command_args: list[str]) -> None:
+    """Append a masked command to history with safe directory/file handling."""
+    from .security import HISTORY_FILE
+
+    history_file = HISTORY_FILE
+    history_file.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        with open(history_file, "r", encoding="utf-8") as handle:
+            history = json.load(handle)
+    except (OSError, json.JSONDecodeError):
+        history = []
+
+    history.append(
+        {
+            "command": _mask_secrets(" ".join(command_args)),
+            "timestamp": datetime.now().isoformat(timespec="seconds"),
+        }
+    )
+    write_private_json(history_file, history[-100:])
+
+
+def _normalize_exec_alias(argv: list[str]) -> list[str]:
+    """Map `darkmage -p ...` / `darkmage --print ...` to `darkmage exec ...`."""
+    if argv and argv[0] in ("-p", "--print"):
+        return ["exec"] + argv[1:]
+    if argv and argv[0].startswith("--print="):
+        return ["exec", argv[0].split("=", 1)[1]] + argv[1:]
+    return argv
+
+
 def main(argv: list[str] | None = None) -> int:
+    command_args = list(argv) if argv is not None else sys.argv[1:]
+    normalized_argv = _normalize_exec_alias(command_args)
     parser = build_parser()
-    args = parser.parse_args(argv)
+    args = parser.parse_args(normalized_argv)
 
     client = DarkmageClient(base_url=args.url)
     if args.runner_url:
@@ -2212,29 +2568,17 @@ def main(argv: list[str] | None = None) -> int:
         parser.print_help()
         return 1
 
+    exit_code = 0
     try:
-        func(args, client)
-        # Record command in history (passwords are masked, never stored in plain text).
-        import json
-
-        from .security import CONFIG_DIR
-
-        history_file = CONFIG_DIR / "history.json"
+        result = func(args, client)
+        if isinstance(result, int):
+            exit_code = result
+        # Record command in history (secrets are masked, never stored in plain text).
         try:
-            with open(history_file, "r", encoding="utf-8") as f:
-                history = json.load(f)
-        except (OSError, json.JSONDecodeError):
-            history = []
-        history.append(
-            {
-                "command": _mask_password(" ".join(sys.argv[1:])),
-                "timestamp": str(__import__("datetime").datetime.now()),
-            }
-        )
-        # Keep only last 100 entries
-        history = history[-100:]
-        with open(history_file, "w", encoding="utf-8") as f:
-            json.dump(history, f, ensure_ascii=False, indent=2)
+            _record_history(command_args)
+        except OSError as exc:
+            if getattr(args, "verbose", False):
+                print(f"history: {exc}", file=sys.stderr)
     except DarkmageError as exc:
         if getattr(args, "verbose", False):
             import traceback
@@ -2243,7 +2587,7 @@ def main(argv: list[str] | None = None) -> int:
         print_error(str(exc))
     finally:
         client.close()
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":
