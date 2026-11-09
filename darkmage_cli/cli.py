@@ -14,6 +14,7 @@ from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
 
+from . import __version__
 from .client import DarkmageClient, DarkmageError, print_error, print_json
 from .config import get_token, load_config, save_config
 from .events import (
@@ -35,6 +36,19 @@ from .security import (
     write_private_text,
 )
 from . import sync as sync_mod
+
+
+def _is_interactive_session() -> bool:
+    """True only when both stdin and stdout are attached to a terminal.
+
+    Interactive login/TUI entry points must never fall through to ``input()``
+    in CI or when stdin is redirected: that used to surface as an EOFError
+    traceback instead of a usable error message (P1-10).
+    """
+    try:
+        return bool(sys.stdin.isatty() and sys.stdout.isatty())
+    except (AttributeError, ValueError):  # pragma: no cover - exotic streams
+        return False
 
 
 def cmd_register(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -77,8 +91,16 @@ def cmd_logout(args: argparse.Namespace, client: DarkmageClient) -> None:
     print("Logged out.")
 
 
-def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Интерактивный вход/регистрация как в Claude Code."""
+
+    if not _is_interactive_session():
+        print(
+            "Error: интерактивный вход требует TTY. Используйте "
+            "'darkmage auth login --email ...' или DARKMAGE_TOKEN.",
+            file=sys.stderr,
+        )
+        return 2
 
     print("👋 Добро пожаловать в Darkmage AI")
     print()
@@ -88,17 +110,17 @@ def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> No
     if config.get("token") and config.get("base_url"):
         print(f"Вы уже вошли как токен: {mask_token(config['token'])}")
         print("Используйте 'darkmage auth logout' для выхода.")
-        return
+        return 0
 
     email = input("Email: ").strip()
     if not email:
         print("Ошибка: email не может быть пустым.")
-        return
+        return 0
 
     password = getpass.getpass("Пароль: ")
     if not password:
         print("Ошибка: пароль не может быть пустым.")
-        return
+        return 0
 
     full_name = input("Полное имя (опционально): ").strip() or None
 
@@ -111,13 +133,13 @@ def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> No
             set_token(token)
             client.token = token
             print(f"\n✅ Вход выполнен как {email}")
-            return
+            return 0
     except DarkmageError as exc:
         if "already exists" in str(exc).lower() or "not found" in str(exc).lower():
             pass  # Регистрируемся ниже
         else:
             print(f"Ошибка входа: {exc}")
-            return
+            return 1
 
     # Регистрируемся
     print("Аккаунт не найден. Регистрация нового аккаунта...")
@@ -133,40 +155,46 @@ def cmd_auth_interactive(args: argparse.Namespace, client: DarkmageClient) -> No
             print(f"Не удалось зарегистрироваться: {data}")
     except DarkmageError as exc:
         print(f"Ошибка регистрации: {exc}")
-        return
+        return 1
 
     # Предлагаем открыть рабочую зону
     print()
     print("🎉 Готово! Теперь вы можете:")
     print("  darkmage workspace list   — посмотреть рабочие зоны")
     print("  darkmage tui <workspace_id> — открыть интерактивный терминал")
+    return 0
 
 
-def cmd_login_alias(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_login_alias(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Alias для auth interactive."""
-    cmd_auth_interactive(args, client)
+    return cmd_auth_interactive(args, client)
 
 
-def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Запуск интерактивного сеанса как в Claude Code."""
-    from .config import load_config
+    from .config import get_token
 
-    config = load_config()
-    token = config.get("token")
-    base_url = config.get("base_url")
+    if not _is_interactive_session():
+        print(
+            "Error: 'start' требует интерактивный терминал (TTY). "
+            "В CI используйте 'darkmage exec ...'.",
+            file=sys.stderr,
+        )
+        return 2
 
+    # DARKMAGE_TOKEN wins over the config file (same precedence as every other
+    # command); cmd_start used to read only ~/.darkmage-cli/config.json (P1-11).
+    token = get_token() or client.token
     if not token:
         print("🔐 Токен не найден. Нужно войти в систему.")
         cmd_auth_interactive(args, client)
-        config = load_config()
-        token = config.get("token")
+        token = get_token() or client.token
         if not token:
             print("Не удалось войти. Попробуйте позже.")
-            return
+            return 1
 
     # Обновляем клиент с токеном
     client.token = token
-    client.base_url = base_url or client.base_url
 
     # Показываем рабочие зоны (на каждого пользователя одна)
     print("\n📋 Ваша рабочая зона:")
@@ -174,13 +202,13 @@ def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
         workspaces = client.workspace_list()
         if not workspaces:
             print("   Рабочих зон нет. Создайте сессию: darkmage session new")
-            return
+            return 0
         for i, ws in enumerate(workspaces, 1):
             status = _color_status(ws.get("status", ""))
             print(f"  {i}. {ws.get('name')} ({ws.get('id')}) [{status}]")
     except DarkmageError as exc:
         print(f"Ошибка получения рабочих зон: {exc}")
-        return
+        return 1
 
     if len(workspaces) == 1:
         # Одна зона на пользователя: выбирать нечего.
@@ -189,15 +217,15 @@ def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
         choice = input("\nВыберите рабочую зону (номер) или нажмите Enter для отмены: ").strip()
         if not choice:
             print("Отменено.")
-            return
+            return 0
         try:
             idx = int(choice) - 1
             if idx < 0 or idx >= len(workspaces):
                 print("Неверный номер.")
-                return
+                return 0
         except ValueError:
             print("Неверный номер.")
-            return
+            return 0
     workspace_id = workspaces[idx]["id"]
 
     # Запуск TUI
@@ -209,6 +237,7 @@ def cmd_start(args: argparse.Namespace, client: DarkmageClient) -> None:
         token=client.token,
         workspace_id=workspace_id,
     )
+    return 0
 
 
 def cmd_me(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -2663,7 +2692,16 @@ _darkmage_complete() {
 
     case "$prev" in
         darkmage)
-            COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run repl approvals exec process payment admin term tui config git mcp chat health ready doctor completion history parallel login start' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run repl approvals exec process payment admin term tui config git mcp chat health ready doctor completion history parallel login start --json --version --url --verbose' -- "$cur") )
+            ;;
+        --output-format)
+            COMPREPLY=( $(compgen -W 'text json stream-json' -- "$cur") )
+            ;;
+        --scope)
+            COMPREPLY=( $(compgen -W 'call turn' -- "$cur") )
+            ;;
+        --product)
+            COMPREPLY=( $(compgen -W 'standard_30d credits' -- "$cur") )
             ;;
         auth)
             COMPREPLY=( $(compgen -W 'register login logout interactive' -- "$cur") )
@@ -2681,25 +2719,34 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create list new all runs files read' -- "$cur") )
             ;;
         run)
-            COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty' -- "$cur") )
             ;;
         approvals)
-            COMPREPLY=( $(compgen -W 'approve reject' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'approve reject --json --scope' -- "$cur") )
             ;;
         process)
-            COMPREPLY=( $(compgen -W 'start output stop' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'start output stop --json' -- "$cur") )
             ;;
         payment)
-            COMPREPLY=( $(compgen -W 'create list' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create list --json --product --amount-rub' -- "$cur") )
             ;;
         git)
-            COMPREPLY=( $(compgen -W 'clone commit push pr' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'clone commit push pr --json' -- "$cur") )
             ;;
         mcp)
-            COMPREPLY=( $(compgen -W 'list call' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'list call --json' -- "$cur") )
             ;;
         config)
-            COMPREPLY=( $(compgen -W 'show set export import' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'show set export import --json --url --runner-url --token --runner-token' -- "$cur") )
+            ;;
+        exec)
+            COMPREPLY=( $(compgen -W '--json --session --output-format --output-last-message -o --model --plan-only' -- "$cur") )
+            ;;
+        doctor)
+            COMPREPLY=( $(compgen -W '--json --url' -- "$cur") )
+            ;;
+        completion)
+            COMPREPLY=( $(compgen -W 'bash zsh fish' -- "$cur") )
             ;;
         history)
             COMPREPLY=()
@@ -2719,7 +2766,7 @@ def _zsh_completion_script() -> str:
 
 #compdef darkmage
 
-_darkmage_complete() {
+_darkmage() {
     local -a commands
     commands=(
         'auth:Authentication commands'
@@ -2751,7 +2798,41 @@ _darkmage_complete() {
         'login:Interactive login'
         'start:Start TUI session'
     )
-    _describe 'command' commands
+
+    _arguments -C \\
+        '(-h --help)'{-h,--help}'[Show help]' \\
+        '--version[Show version and exit]' \\
+        '--json[Output JSON (before or after the subcommand)]' \\
+        '--url[API base URL]:url:_urls' \\
+        '--runner-url[Runner-manager URL]:url:_urls' \\
+        '--runner-token[Runner-manager token]:token:' \\
+        '--verbose[Show traceback on errors]' \\
+        '1:command:->command' \\
+        '*::arg:->args'
+
+    case $state in
+        command)
+            _describe 'command' commands
+            ;;
+        args)
+            case $words[2] in
+                exec)
+                    _arguments '--json[Output JSON]' \\
+                        '--session[Session id]:session id:' \\
+                        '--output-format[Output format]:format:(text json stream-json)' \\
+                        '--output-last-message[Write final answer to a file]:file:_files' \\
+                        '--model[Model or alias]:model:' \\
+                        '--plan-only[Plan only]'
+                    ;;
+                approvals)
+                    _arguments '--scope[Approval scope]:scope:(call turn)'
+                    ;;
+                complete|completion)
+                    _values 'shell' bash zsh fish
+                    ;;
+            esac
+            ;;
+    esac
 }
 
 _darkmage "$@"
@@ -2791,6 +2872,27 @@ complete -c darkmage -f -a 'parallel' -d 'Run commands concurrently'
 complete -c darkmage -f -a 'login' -d 'Interactive login'
 complete -c darkmage -f -a 'start' -d 'Start TUI session'
 
+# Global options (accepted before or after the subcommand)
+complete -c darkmage -l json -d 'JSON output'
+complete -c darkmage -l version -s V -d 'Show version and exit'
+complete -c darkmage -l url -r -d 'API base URL'
+complete -c darkmage -l runner-url -r -d 'Runner-manager URL'
+complete -c darkmage -l runner-token -r -d 'Runner-manager token'
+complete -c darkmage -l verbose -d 'Show traceback on errors'
+
+# exec one-shot options
+complete -c darkmage -l output-format -x -a 'text json stream-json' -d 'Output format' -n '__fish_seen_subcommand_from exec'
+complete -c darkmage -l session -r -d 'Session id' -n '__fish_seen_subcommand_from exec'
+complete -c darkmage -l output-last-message -s o -r -d 'Write final answer to file' -n '__fish_seen_subcommand_from exec'
+complete -c darkmage -l model -r -d 'Model or alias' -n '__fish_seen_subcommand_from exec'
+complete -c darkmage -l plan-only -d 'Plan only' -n '__fish_seen_subcommand_from exec'
+
+# run / approvals options
+complete -c darkmage -l follow -d 'Follow the run' -n '__fish_seen_subcommand_from run'
+complete -c darkmage -l no-follow -d 'Create the run and exit' -n '__fish_seen_subcommand_from run'
+complete -c darkmage -l scope -x -a 'call turn' -d 'Approval scope' -n '__fish_seen_subcommand_from approvals'
+complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
+
 # Subcommand completions
 complete -c darkmage -f -a 'register login logout interactive' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
 complete -c darkmage -f -a 'create list get update start stop delete apk godot blender godot-tests tiled-import ldtk-import' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
@@ -2807,11 +2909,46 @@ complete -c darkmage -f -a 'show set export import' -d 'config subcommands' -n '
 """
 
 
+def _iter_subparsers(parser: argparse.ArgumentParser):
+    """Yield every subparser below *parser*, depth-first."""
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            for child in action.choices.values():
+                yield child
+                yield from _iter_subparsers(child)
+
+
+def _add_json_to_subparsers(parser: argparse.ArgumentParser) -> None:
+    """Accept ``--json`` after the subcommand, not only before it (P1-7).
+
+    The flag is added with ``SUPPRESS`` so a child parser never overwrites a
+    value already set by the global option (``darkmage --json config show``).
+    Parsers that define their own ``--json`` (chat/doctor/config show) are left
+    alone; their defaults are also ``SUPPRESS`` for the same reason.
+    """
+    for child in _iter_subparsers(parser):
+        if any("--json" in action.option_strings for action in child._actions):
+            continue
+        child.add_argument(
+            "--json",
+            action="store_true",
+            default=argparse.SUPPRESS,
+            help=argparse.SUPPRESS,
+        )
+
+
 def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         prog="darkmage",
         description="CLI for the Darkmage AI platform",
         epilog="One-shot: darkmage -p '...' is shorthand for darkmage exec '...'",
+    )
+    parser.add_argument(
+        "--version",
+        "-V",
+        action="version",
+        version=f"%(prog)s {__version__}",
+        help="Показать версию и выйти",
     )
     parser.add_argument(
         "--url", default=None, help="API base URL (default: DARKMAGE_API_URL or http://localhost:8000)"
@@ -2832,7 +2969,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--json",
         action="store_true",
         default=False,
-        help="Вывод в формате JSON",
+        help="Вывод в формате JSON (можно указать до или после подкоманды)",
     )
     sub = parser.add_subparsers(dest="command", required=False)
 
@@ -3319,7 +3456,12 @@ def build_parser() -> argparse.ArgumentParser:
     config_sub = config.add_subparsers(dest="config_command", required=True)
 
     p = config_sub.add_parser("show", help="Показать текущий конфиг")
-    p.add_argument("--json", action="store_true", default=False, help="JSON-вывод")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON-вывод",
+    )
     p.set_defaults(func=cmd_config_show)
 
     p = config_sub.add_parser("set", help="Установить параметры конфига")
@@ -3460,6 +3602,7 @@ def build_parser() -> argparse.ArgumentParser:
     )
     parallel.set_defaults(func=cmd_parallel)
 
+    _add_json_to_subparsers(parser)
     return parser
 
 
@@ -3565,11 +3708,31 @@ def main(argv: list[str] | None = None) -> int:
     #   нет токена  → вход / регистрация
     #   есть токен  → список рабочих зон и запуск TUI
     if not getattr(args, "command", None):
+        if not _is_interactive_session():
+            message = (
+                "не указана команда, а stdin/stdout не являются TTY. "
+                "Интерактивный вход и TUI требуют терминал. Используйте "
+                "`darkmage --help`, `darkmage auth login --email ...` или "
+                "`darkmage exec ...`."
+            )
+            if getattr(args, "json", False):
+                print_json(
+                    {
+                        "schema_version": 1,
+                        "error": {
+                            "code": "interactive_required",
+                            "message": message,
+                            "retryable": False,
+                        },
+                    }
+                )
+            else:
+                print(f"Error: {message}", file=sys.stderr)
+            return 2
         config = load_config()
-        if config.get("token"):
+        if config.get("token") or get_token():
             return cmd_start(args, client)
-        else:
-            return cmd_auth_interactive(args, client)
+        return cmd_auth_interactive(args, client)
 
     try:
         func = args.func
