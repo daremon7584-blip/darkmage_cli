@@ -3,6 +3,7 @@ from __future__ import annotations
 import base64
 import json
 import sys
+import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
@@ -11,9 +12,23 @@ import httpx
 
 from .config import get_base_url, get_runner_token, get_runner_url, get_token
 
+TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
+TERMINAL_EVENTS = frozenset({"run.completed", "run.failed", "run.cancelled"})
+
 
 class DarkmageError(Exception):
-    pass
+    """API/transport error with enough context for retry decisions."""
+
+    def __init__(
+        self,
+        message: str,
+        *,
+        status_code: int | None = None,
+        retryable: bool = False,
+    ) -> None:
+        super().__init__(message)
+        self.status_code = status_code
+        self.retryable = retryable
 
 
 class DarkmageClient:
@@ -41,7 +56,9 @@ class DarkmageClient:
         try:
             resp = self._client.request(method, url, **kwargs)
         except httpx.RequestError as exc:
-            raise DarkmageError(f"Cannot reach {url}: {exc}") from exc
+            raise DarkmageError(
+                f"Cannot reach {url}: {exc}", retryable=True
+            ) from exc
         return resp
 
     def _json_or_text(self, resp: httpx.Response) -> Any:
@@ -58,8 +75,11 @@ class DarkmageClient:
                 detail = body.get("detail", "") if isinstance(body, dict) else str(body)
             except ValueError:
                 detail = resp.text
+            retryable = resp.status_code == 429 or resp.status_code >= 500
             raise DarkmageError(
-                f"{resp.status_code} {resp.reason_phrase} for {resp.request.method} {resp.url.path}: {detail}"
+                f"{resp.status_code} {resp.reason_phrase} for {resp.request.method} {resp.url.path}: {detail}",
+                status_code=resp.status_code,
+                retryable=retryable,
             )
 
     # --- auth ---
@@ -391,6 +411,24 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def tool_call_approve(self, tool_call_id: str, scope: str = "call") -> dict:
+        """Approve a pending tool call (``scope`` is ``call`` or ``turn``)."""
+        if scope not in ("call", "turn"):
+            raise DarkmageError("Approval scope must be 'call' or 'turn'")
+        resp = self._request(
+            "POST",
+            f"/tool-calls/{tool_call_id}/approve",
+            json={"scope": scope},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def tool_call_reject(self, tool_call_id: str) -> dict:
+        """Reject a pending tool call; the agent receives ``approval_rejected``."""
+        resp = self._request("POST", f"/tool-calls/{tool_call_id}/reject")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def run_events(self, run_id: str, last_event_id: str | None = None) -> str:
         headers = dict(self._headers())
         headers["Accept"] = "text/event-stream"
@@ -403,13 +441,83 @@ class DarkmageClient:
         return resp.text
 
     def run_events_parsed(
-        self, run_id: str, last_event_id: int | None = None
+        self,
+        run_id: str,
+        last_event_id: int | None = None,
+        *,
+        max_retries: int = 6,
+        initial_backoff: float = 0.5,
+        max_backoff: float = 30.0,
     ) -> Iterator[dict[str, Any]]:
         """Stream parsed SSE events from /runs/{run_id}/events.
 
-        Yields dicts with keys: id, event, data, _at.
+        Yields dicts with keys: id, event, data, _at. The stream reconnects with
+        bounded exponential backoff and ``Last-Event-ID`` after a dropped
+        connection; already yielded sequence numbers are deduplicated so a run
+        is never lost just because the terminal output was interrupted.
         Stops after the run reaches a terminal state.
         """
+        last_sequence = _event_sequence(last_event_id) or 0
+        consecutive_failures = 0
+
+        while True:
+            error: DarkmageError | None = None
+            try:
+                for event in self._iter_sse_events(
+                    run_id, last_sequence if last_sequence else None
+                ):
+                    consecutive_failures = 0
+                    sequence = _event_sequence(event.get("id"))
+                    if sequence is not None:
+                        if sequence <= last_sequence:
+                            # Server replayed the boundary event after reconnect.
+                            continue
+                        last_sequence = sequence
+                    yield event
+                    if event.get("event") in TERMINAL_EVENTS:
+                        return
+            except DarkmageError as exc:
+                if not exc.retryable:
+                    raise
+                error = exc
+            except httpx.RequestError as exc:
+                error = DarkmageError(
+                    f"SSE stream interrupted: {exc}", retryable=True
+                )
+            except httpx.StreamError as exc:
+                error = DarkmageError(
+                    f"SSE stream interrupted: {exc}", retryable=True
+                )
+            except OSError as exc:
+                error = DarkmageError(
+                    f"SSE stream interrupted: {exc}", retryable=True
+                )
+
+            # A clean EOF without a terminal event means the server closed the
+            # connection (deploy, proxy timeout). Reconnect unless the run has
+            # actually finished; the terminal event may simply have been lost.
+            if self._run_is_finished(run_id):
+                return
+
+            consecutive_failures += 1
+            if consecutive_failures > max_retries:
+                if error is not None:
+                    raise error
+                raise DarkmageError(
+                    f"SSE stream for {run_id} closed after "
+                    f"{max_retries} reconnect attempts",
+                    retryable=True,
+                )
+            delay = min(
+                max_backoff, initial_backoff * (2 ** (consecutive_failures - 1))
+            )
+            if delay > 0:
+                time.sleep(delay)
+
+    def _iter_sse_events(
+        self, run_id: str, last_event_id: int | None = None
+    ) -> Iterator[dict[str, Any]]:
+        """One connection to the SSE endpoint (no reconnect logic)."""
         headers = dict(self._headers())
         headers["Accept"] = "text/event-stream"
         if last_event_id is not None:
@@ -418,27 +526,57 @@ class DarkmageClient:
             "GET", f"{self.base_url}/runs/{run_id}/events", headers=headers
         ) as resp:
             self._raise_for_status(resp)
+            event_id = ""
+            event_type = ""
+            data_lines: list[str] = []
             for raw_line in resp.iter_lines():
-                if not raw_line:
+                if raw_line == "":
+                    if data_lines:
+                        payload_text = "\n".join(data_lines)
+                        try:
+                            payload = json.loads(payload_text)
+                        except json.JSONDecodeError:
+                            payload = {"raw": payload_text}
+                        event = {
+                            "id": event_id,
+                            "event": event_type,
+                            "data": payload,
+                        }
+                        event_id = ""
+                        event_type = ""
+                        data_lines = []
+                        yield event
                     continue
                 if raw_line.startswith(":"):
-                    continue  # keep-alive
-                if raw_line.startswith("id: "):
-                    event_id = raw_line[4:]
-                elif raw_line.startswith("event: "):
-                    event_type = raw_line[7:]
-                elif raw_line.startswith("data: "):
-                    try:
-                        payload = json.loads(raw_line[6:])
-                    except json.JSONDecodeError:
-                        payload = {"raw": raw_line[6:]}
-                    yield {
-                        "id": event_id,
-                        "event": event_type,
-                        "data": payload,
-                    }
-                    event_id = ""
-                    event_type = ""
+                    continue  # keep-alive / comment
+                field, separator, value = raw_line.partition(":")
+                if not separator:
+                    continue
+                if value.startswith(" "):
+                    value = value[1:]
+                if field == "id":
+                    event_id = value
+                elif field == "event":
+                    event_type = value
+                elif field == "data":
+                    data_lines.append(value)
+            if data_lines:
+                payload_text = "\n".join(data_lines)
+                try:
+                    payload = json.loads(payload_text)
+                except json.JSONDecodeError:
+                    payload = {"raw": payload_text}
+                yield {"id": event_id, "event": event_type, "data": payload}
+
+    def _run_is_finished(self, run_id: str) -> bool:
+        try:
+            run = self.run_get(run_id)
+        except DarkmageError:
+            return False
+        return (
+            isinstance(run, dict)
+            and str(run.get("status") or "") in TERMINAL_RUN_STATUSES
+        )
 
     def run_answer(self, run_id: str, question_id: str, answers: list[str]) -> dict:
         resp = self._request(
@@ -783,6 +921,14 @@ class DarkmageClient:
 
     def close(self) -> None:
         self._client.close()
+
+
+def _event_sequence(value: Any) -> int | None:
+    """Parse an SSE event id (run event sequence) into an integer."""
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
 
 
 def _image_mime(data: bytes) -> str:

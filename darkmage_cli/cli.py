@@ -12,6 +12,14 @@ from typing import Any, Awaitable, Callable, cast
 
 from .client import DarkmageClient, DarkmageError, print_error, print_json
 from .config import get_token, load_config, save_config
+from .events import (
+    approval_card,
+    approval_summary,
+    format_diff,
+    question_card,
+    question_items,
+    question_text,
+)
 from .security import (
     is_redacted_value,
     is_secret_key,
@@ -273,9 +281,38 @@ def cmd_ws_stop(args: argparse.Namespace, client: DarkmageClient) -> None:
     print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
-def cmd_ws_delete(args: argparse.Namespace, client: DarkmageClient) -> None:
+def _confirm_destructive(
+    action: str, assume_yes: bool, *, input_fn: Callable[[str], str] | None = None
+) -> bool:
+    """Ask before a destructive operation, or require an explicit --yes.
+
+    In a non-interactive session (CI, piped stdin) the safe default is to
+    refuse and tell the caller to pass --yes.
+    """
+    if assume_yes:
+        return True
+    if not sys.stdin.isatty():
+        print(
+            f"{action}: confirmation required in non-interactive mode; re-run with --yes",
+            file=sys.stderr,
+        )
+        return False
+    reader = input_fn or input
+    try:
+        answer = reader(f"{action}? [y/N]: ").strip().lower()
+    except EOFError:
+        return False
+    return answer in ("y", "yes")
+
+
+def cmd_ws_delete(args: argparse.Namespace, client: DarkmageClient) -> int:
+    action = f"Delete workspace {args.workspace_id} (this cannot be undone)"
+    if not _confirm_destructive(action, getattr(args, "yes", False)):
+        print("Cancelled.")
+        return 1
     client.workspace_delete(args.workspace_id)
     print(f"Workspace {args.workspace_id} deleted.")
+    return 0
 
 
 def cmd_ws_files(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -413,9 +450,14 @@ def cmd_files_mv(args: argparse.Namespace, client: DarkmageClient) -> None:
         print_error("Specify exactly one side as ws:/path")
 
 
-def cmd_files_rm(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_files_rm(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Remove a file from workspace or local filesystem."""
     target = args.path
+    if not _confirm_destructive(
+        f"Delete {target}", getattr(args, "yes", False)
+    ):
+        print("Cancelled.")
+        return 1
     if target.startswith("ws:"):
         remote_path = target[3:]
         client.workspace_file_delete(args.workspace_id, remote_path)
@@ -427,6 +469,7 @@ def cmd_files_rm(args: argparse.Namespace, client: DarkmageClient) -> None:
             print(f"✅ Deleted {target}")
         else:
             print_error(f"File not found: {target}")
+    return 0
 
 
 def cmd_files_export(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -820,9 +863,13 @@ def _format_event(ev: dict) -> str:
         elif etype == "tool.output":
             detail = str(data.get("output", ""))[:120]
         elif etype == "approval.required":
-            detail = f"{data.get('name', '')} path={data.get('path', '')}"
+            detail = approval_summary(data)
         elif etype == "approval.resolved":
-            detail = f"{data.get('decision', '')} scope={data.get('scope', '')}"
+            detail = (
+                f"{data.get('decision', '')} "
+                f"scope={data.get('scope', 'call')} "
+                f"by={data.get('by', 'owner')}"
+            )
         elif etype == "run.completed":
             detail = f"finish_reason={data.get('finish_reason', '')}"
         elif etype == "run.failed":
@@ -830,24 +877,45 @@ def _format_event(ev: dict) -> str:
         elif etype == "context.compacted":
             detail = f"dropped={data.get('dropped_messages', '')} before={data.get('tokens_before', '')} after={data.get('tokens_after', '')}"
         elif etype == "agent.question":
-            detail = data.get("question", "")
+            detail = question_text(data)
+            if data.get("question_id"):
+                detail += f" (question_id={data['question_id']})"
         elif etype == "agent.answer":
             detail = f"answers={data.get('answers', [])}"
+        elif etype == "diff.ready":
+            detail = "\n" + format_diff(data)
+            return f"[{eid}] {etype}: {detail}"
         return f"[{eid}] {etype}: {detail}"
     return f"[{eid}] {etype}: {data}"
 
 
-def cmd_run_create(args: argparse.Namespace, client: DarkmageClient) -> None:
-    print_json(
-        client.run_create(
-            args.session_id,
-            args.prompt,
-            args.model,
-            args.plan_only,
-            args.thorough,
-            args.image if args.image else None,
-        )
+def cmd_run_create(args: argparse.Namespace, client: DarkmageClient) -> int:
+    run = client.run_create(
+        args.session_id,
+        args.prompt,
+        args.model,
+        args.plan_only,
+        args.thorough,
+        args.image if args.image else None,
     )
+    run_id = str(run.get("id") or run.get("run_id") or "")
+    # On a terminal, follow the run like an agent CLI; --no-follow keeps the
+    # old "create and exit" behaviour for scripts that parse the JSON.
+    follow = getattr(args, "follow", False) or (
+        sys.stdout.isatty()
+        and not getattr(args, "no_follow", False)
+        and not getattr(args, "json", False)
+    )
+    if follow and run_id:
+        print(f"▶ run {run_id}", file=sys.stderr, flush=True)
+        return _follow_run(
+            client,
+            run_id,
+            str(run.get("session_id") or args.session_id),
+            output_format="json" if getattr(args, "json", False) else "text",
+        )
+    print_json(run)
+    return 0
 
 
 def cmd_run_get(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -920,17 +988,50 @@ def cmd_run_stop(args: argparse.Namespace, client: DarkmageClient) -> None:
     print(f"Статус: {_color_status(data.get('status', ''))}")
 
 
-def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> int:
     last_id = args.last_event_id
     pretty = args.pretty
-    for ev in client.run_events_parsed(args.run_id, last_id):
-        line = _format_event(ev)
-        if pretty:
-            print(_color(line, ev.get("event", "")))
-        else:
-            print(json.dumps(ev, ensure_ascii=False))
-        if ev.get("event") in {"run.completed", "run.failed", "run.cancelled"}:
-            break
+    try:
+        for ev in client.run_events_parsed(args.run_id, last_id):
+            line = _format_event(ev)
+            if pretty:
+                print(_color(line, ev.get("event", "")))
+            else:
+                print(json.dumps(ev, ensure_ascii=False))
+            if ev.get("event") in {"run.completed", "run.failed", "run.cancelled"}:
+                break
+    except KeyboardInterrupt:
+        print(
+            f"\nDetached. Run {args.run_id} continues; "
+            f"stop it with 'darkmage run stop {args.run_id}'.",
+            file=sys.stderr,
+        )
+        return 130
+    return 0
+
+
+def cmd_approval_approve(args: argparse.Namespace, client: DarkmageClient) -> int:
+    data = client.tool_call_approve(args.tool_call_id, args.scope)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+    else:
+        print(
+            f"Approved {data.get('name', 'tool call')} "
+            f"({data.get('id', args.tool_call_id)}), status={data.get('status', 'approved')}"
+        )
+    return 0
+
+
+def cmd_approval_reject(args: argparse.Namespace, client: DarkmageClient) -> int:
+    data = client.tool_call_reject(args.tool_call_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+    else:
+        print(
+            f"Rejected {data.get('name', 'tool call')} "
+            f"({data.get('id', args.tool_call_id)}), status={data.get('status', 'rejected')}"
+        )
+    return 0
 
 
 _EXEC_TERMINAL_EVENTS = {
@@ -938,6 +1039,8 @@ _EXEC_TERMINAL_EVENTS = {
     "run.failed": "failed",
     "run.cancelled": "cancelled",
 }
+_EXIT_APPROVAL_DENIED = 4
+_EXIT_INTERRUPTED = 130
 
 
 def _resolve_exec_session(client: DarkmageClient, session_id: str | None) -> str:
@@ -961,18 +1064,330 @@ def _resolve_exec_session(client: DarkmageClient, session_id: str | None) -> str
 
 
 def _question_text(data: dict[str, Any]) -> str:
-    questions = data.get("questions")
-    if isinstance(questions, list) and questions:
-        parts = []
-        for item in questions:
-            if isinstance(item, dict):
-                parts.append(
-                    str(item.get("question") or item.get("text") or item)
+    """Backwards-compatible wrapper around the shared question renderer."""
+    return question_text(data)
+
+
+def _is_interactive() -> bool:
+    try:
+        return bool(sys.stdin.isatty())
+    except (AttributeError, ValueError):
+        return False
+
+
+def _prompt_approval(
+    client: DarkmageClient,
+    data: dict[str, Any],
+    *,
+    input_fn: Callable[[str], str] | None = None,
+    output: Any = None,
+) -> bool:
+    """Resolve an ``approval.required`` event interactively.
+
+    Returns True when the decision was sent (or the approval was already
+    resolved by someone else), False when the caller must stop and expose the
+    approval id (non-interactive mode).
+    """
+    stream = output or sys.stderr
+    approval_id = str(data.get("approval_id") or "")
+    if data.get("auto"):
+        # Policy-approved call: approval.resolved follows immediately.
+        return False
+    if not approval_id:
+        print(
+            "Approval required but the event has no approval_id; "
+            "open the run in the web UI.",
+            file=stream,
+        )
+        return False
+    if not _is_interactive():
+        print(approval_card(data), file=stream)
+        print(
+            "Non-interactive: decide with "
+            f"'darkmage approvals approve {approval_id}' or "
+            f"'darkmage approvals reject {approval_id}'.",
+            file=stream,
+        )
+        return False
+
+    reader = input_fn or input
+    while True:
+        print(approval_card(data), file=stream)
+        try:
+            choice = reader(
+                "Approve? [a] once / [A] rest of turn / [r] reject / [d] diff: "
+            )
+        except EOFError:
+            return False
+        choice = choice.strip()
+        scope = "call"
+        if choice in ("", "a", "y", "yes"):
+            scope = "call"
+        elif choice in ("A", "t", "turn", "all"):
+            scope = "turn"
+        elif choice.lower() in ("r", "n", "no", "reject"):
+            try:
+                result = client.tool_call_reject(approval_id)
+            except DarkmageError as exc:
+                if exc.status_code == 409:
+                    print(
+                        f"Approval {approval_id} is no longer pending; "
+                        "continuing the stream.",
+                        file=stream,
+                    )
+                    return True
+                print(f"Could not reject approval {approval_id}: {exc}", file=stream)
+                return False
+            print(
+                f"Rejected {result.get('name', 'tool call')} ({approval_id}).",
+                file=stream,
+            )
+            return True
+        elif choice.lower() in ("d", "diff"):
+            print(format_diff(data, max_lines=1000), file=stream)
+            continue
+        else:
+            print("Unknown choice. Use a, A, r or d.", file=stream)
+            continue
+
+        try:
+            result = client.tool_call_approve(approval_id, scope)
+        except DarkmageError as exc:
+            if exc.status_code == 409:
+                print(
+                    f"Approval {approval_id} is no longer pending; "
+                    "continuing the stream.",
+                    file=stream,
                 )
-            else:
-                parts.append(str(item))
-        return "; ".join(parts)
-    return str(data.get("question") or "")
+                return True
+            print(f"Could not approve {approval_id}: {exc}", file=stream)
+            return False
+        print(
+            f"Approved {result.get('name', 'tool call')} ({approval_id}) "
+            f"for {'the rest of the turn' if scope == 'turn' else 'this call'}.",
+            file=stream,
+        )
+        return True
+
+
+def _prompt_question(
+    client: DarkmageClient,
+    run_id: str,
+    data: dict[str, Any],
+    *,
+    input_fn: Callable[[str], str] | None = None,
+    output: Any = None,
+) -> bool:
+    """Answer an ``agent.question`` event interactively.
+
+    Returns True when answers were submitted; False in non-interactive mode
+    (caller exits 4 and prints the question_id).
+    """
+    stream = output or sys.stderr
+    question_id = str(data.get("question_id") or "")
+    items = question_items(data)
+    if not question_id or not items:
+        print(
+            "Agent asked a question but the event is incomplete; "
+            f"open the run in the web UI. {question_card(data)}",
+            file=stream,
+        )
+        return False
+    if not _is_interactive():
+        print(question_card(data), file=stream)
+        print(
+            "Non-interactive: answer with "
+            f"'darkmage run answer {run_id} {question_id} \"answer\" ...'.",
+            file=stream,
+        )
+        return False
+
+    print(question_card(data), file=stream)
+    reader = input_fn or input
+    answers: list[str] = []
+    for index, item in enumerate(items, 1):
+        options = item.get("options") or []
+        while True:
+            try:
+                value = reader(
+                    f"Answer {index}/{len(items)}"
+                    + (" (number or text): " if options else ": ")
+                ).strip()
+            except EOFError:
+                return False
+            if not value:
+                if options:
+                    value = options[0]["label"]
+                else:
+                    print("Answer cannot be empty.", file=stream)
+                    continue
+            if options and value.isdigit():
+                option_index = int(value)
+                if 1 <= option_index <= len(options):
+                    value = options[option_index - 1]["label"]
+                else:
+                    print(f"Choose 1..{len(options)}.", file=stream)
+                    continue
+            answers.append(value)
+            break
+
+    try:
+        result = client.run_answer(run_id, question_id, answers)
+    except DarkmageError as exc:
+        if exc.status_code == 409:
+            print(
+                f"Question {question_id} was already answered; "
+                "continuing the stream.",
+                file=stream,
+            )
+            return True
+        print(f"Could not answer question {question_id}: {exc}", file=stream)
+        return False
+    print(
+        f"Answer sent: {result.get('answers', answers)}",
+        file=stream,
+    )
+    return True
+
+
+def _follow_run(
+    client: DarkmageClient,
+    run_id: str,
+    session_id: str,
+    *,
+    output_format: str = "text",
+    output_last_message: str | None = None,
+    input_fn: Callable[[str], str] | None = None,
+) -> int:
+    """Stream a run, resolving approvals/questions, and return an exit code."""
+    if output_format != "stream-json":
+        print(f"▶ run {run_id}", file=sys.stderr, flush=True)
+
+    answer_parts: list[str] = []
+    status = "unknown"
+    pending_approval: dict[str, Any] | None = None
+    pending_question: dict[str, Any] | None = None
+    error_payload: dict[str, Any] | None = None
+
+    try:
+        for event in client.run_events_parsed(run_id):
+            event_type = str(event.get("event", ""))
+            data = event.get("data") or {}
+            if not isinstance(data, dict):
+                data = {"value": data}
+
+            if event_type == "assistant.delta":
+                answer_parts.append(str(data.get("text") or ""))
+            elif event_type == "tool.requested":
+                # Text before a tool call is progress, not the final answer.
+                answer_parts.clear()
+
+            if output_format == "stream-json":
+                print(
+                    json.dumps(event, ensure_ascii=False, default=str),
+                    flush=True,
+                )
+            elif event_type != "assistant.delta":
+                print(_format_event(event), file=sys.stderr, flush=True)
+
+            if event_type == "approval.required":
+                if data.get("auto"):
+                    answer_parts.clear()
+                    continue
+                answer_parts.clear()
+                if _prompt_approval(
+                    client, data, input_fn=input_fn, output=sys.stderr
+                ):
+                    continue
+                status = "approval_required"
+                pending_approval = data
+                break
+            if event_type == "agent.question":
+                answer_parts.clear()
+                if _prompt_question(
+                    client, run_id, data, input_fn=input_fn, output=sys.stderr
+                ):
+                    continue
+                status = "question"
+                pending_question = data
+                break
+            if event_type in _EXEC_TERMINAL_EVENTS:
+                status = _EXEC_TERMINAL_EVENTS[event_type]
+                break
+    except KeyboardInterrupt:
+        print(
+            f"\nDetached. Run {run_id} continues; "
+            f"stop it with 'darkmage run stop {run_id}'.",
+            file=sys.stderr,
+        )
+        return _EXIT_INTERRUPTED
+    except DarkmageError as exc:
+        if output_format != "json":
+            print(f"Error: {exc}", file=sys.stderr)
+        status = "failed"
+        error_payload = {
+            "message": str(exc),
+            "status_code": exc.status_code,
+            "retryable": exc.retryable,
+        }
+
+    run_data: dict[str, Any] = {}
+    try:
+        fetched = client.run_get(run_id)
+        if isinstance(fetched, dict):
+            run_data = fetched
+    except DarkmageError:
+        pass
+    if status in ("unknown", "running") and run_data.get("status"):
+        status = str(run_data["status"])
+
+    final_answer = "".join(answer_parts).strip()
+    if output_last_message and final_answer:
+        try:
+            write_private_text(output_last_message, final_answer + "\n")
+        except OSError as exc:
+            print(
+                f"Warning: не удалось записать {output_last_message}: {exc}",
+                file=sys.stderr,
+            )
+
+    envelope = {
+        "schema_version": 1,
+        "run_id": run_id,
+        "session_id": session_id,
+        "status": status,
+        "result": final_answer,
+        "usage": {
+            "prompt_tokens": run_data.get("prompt_tokens"),
+            "completion_tokens": run_data.get("completion_tokens"),
+        },
+        "last_event_sequence": run_data.get("last_event_sequence"),
+    }
+    if pending_approval is not None:
+        envelope["approval"] = {
+            "approval_id": pending_approval.get("approval_id"),
+            "tool_call_id": pending_approval.get("tool_call_id"),
+            "name": pending_approval.get("name"),
+            "summary": approval_summary(pending_approval),
+        }
+    if pending_question is not None:
+        envelope["question"] = {
+            "question_id": pending_question.get("question_id"),
+            "questions": pending_question.get("questions") or [],
+        }
+    if error_payload is not None:
+        envelope["error"] = error_payload
+
+    if output_format == "json":
+        print_json(envelope)
+    elif output_format == "text" and final_answer and status == "completed":
+        print(final_answer)
+
+    if status == "completed":
+        return 0
+    if status in ("approval_required", "question"):
+        return _EXIT_APPROVAL_DENIED
+    return 1
 
 
 def cmd_exec(args: argparse.Namespace, client: DarkmageClient) -> int:
@@ -1000,6 +1415,19 @@ def cmd_exec(args: argparse.Namespace, client: DarkmageClient) -> int:
             plan_only=getattr(args, "plan_only", False),
         )
     except DarkmageError as exc:
+        if output_format == "json":
+            print_json(
+                {
+                    "schema_version": 1,
+                    "status": "error",
+                    "error": {
+                        "message": str(exc),
+                        "status_code": exc.status_code,
+                        "retryable": exc.retryable,
+                    },
+                }
+            )
+            return 1
         print_error(str(exc))
 
     run_id = str(run.get("id") or run.get("run_id") or "")
@@ -1007,103 +1435,14 @@ def cmd_exec(args: argparse.Namespace, client: DarkmageClient) -> int:
         print("Error: сервер не вернул run id", file=sys.stderr)
         return 1
 
-    if output_format != "stream-json":
-        print(f"▶ run {run_id}", file=sys.stderr, flush=True)
+    return _follow_run(
+        client,
+        run_id,
+        session_id,
+        output_format=output_format,
+        output_last_message=getattr(args, "output_last_message", None),
+    )
 
-    answer_parts: list[str] = []
-    status = "unknown"
-    interrupted = False
-
-    try:
-        for event in client.run_events_parsed(run_id):
-            event_type = str(event.get("event", ""))
-            data = event.get("data") or {}
-            if not isinstance(data, dict):
-                data = {"value": data}
-
-            if event_type == "assistant.delta":
-                answer_parts.append(str(data.get("text") or ""))
-            elif event_type == "tool.requested":
-                # Text before a tool call is progress, not the final answer.
-                answer_parts.clear()
-
-            if output_format == "stream-json":
-                print(
-                    json.dumps(event, ensure_ascii=False, default=str),
-                    flush=True,
-                )
-            elif event_type != "assistant.delta":
-                print(_format_event(event), file=sys.stderr, flush=True)
-
-            if event_type == "approval.required":
-                status = "approval_required"
-                interrupted = True
-                print(
-                    "Approval required. Follow the run with "
-                    f"'darkmage run events {run_id}' or approve it in the UI.",
-                    file=sys.stderr,
-                )
-                break
-            if event_type == "agent.question":
-                status = "question"
-                interrupted = True
-                print(
-                    "Agent question: "
-                    + (_question_text(data) or "(empty)")
-                    + f"\nAnswer it with 'darkmage run answer {run_id} <question_id> ...'",
-                    file=sys.stderr,
-                )
-                break
-            if event_type in _EXEC_TERMINAL_EVENTS:
-                status = _EXEC_TERMINAL_EVENTS[event_type]
-                break
-    except DarkmageError as exc:
-        print(f"Error: {exc}", file=sys.stderr)
-        status = "failed"
-
-    run_data: dict[str, Any] = {}
-    try:
-        fetched = client.run_get(run_id)
-        if isinstance(fetched, dict):
-            run_data = fetched
-    except DarkmageError:
-        pass
-    if status in ("unknown", "running") and run_data.get("status"):
-        status = str(run_data["status"])
-
-    final_answer = "".join(answer_parts).strip()
-    output_last = getattr(args, "output_last_message", None)
-    if output_last and final_answer:
-        try:
-            write_private_text(output_last, final_answer + "\n")
-        except OSError as exc:
-            print(f"Warning: не удалось записать {output_last}: {exc}", file=sys.stderr)
-
-    envelope = {
-        "schema_version": 1,
-        "run_id": run_id,
-        "session_id": session_id,
-        "status": status,
-        "result": final_answer,
-        "usage": {
-            "prompt_tokens": run_data.get("prompt_tokens"),
-            "completion_tokens": run_data.get("completion_tokens"),
-        },
-        "last_event_sequence": run_data.get("last_event_sequence"),
-    }
-
-    if output_format == "json":
-        print_json(envelope)
-    elif output_format == "text" and final_answer and status == "completed":
-        print(final_answer)
-
-    if status == "completed":
-        return 0
-    if status in ("approval_required", "question"):
-        return 4
-    if interrupted:
-        return 4
-    return 1
 
 
 def cmd_process_start(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -1687,44 +2026,104 @@ def cmd_ready(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.ready())
 
 
-def cmd_doctor(args: argparse.Namespace, client: DarkmageClient) -> None:
+def cmd_doctor(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Проверка окружения и подключения к серверу Darkmage."""
-    print("🩺 Проверка состояния Darkmage CLI\n")
-
-    # 1. Конфигурация (env vars win over the saved file, like every other command)
     from .config import get_base_url
-    config = load_config()
-    api_url = args.url or get_base_url()
+
+    api_url = getattr(args, "url", None) or get_base_url()
     token = get_token()
+    failures: list[str] = []
+    health_status: str | None = None
+    ready_status: str | None = None
 
-    print(f"📍 API URL: {api_url}")
-    if token:
-        print(f"🔑 Токен:   {'*' * (len(token) - 4) + token[-4:] if len(token) > 4 else '***'}")
-    else:
-        print("🔑 Токен:   не настроен")
-
-    print()
-
-    # 2. Health check
-    print("🏥 Health check:")
     try:
         client.base_url = api_url
         client.token = token
         h = client.health()
-        print(f"   ✅ /health:  {h.get('status', 'unknown')}")
+        health_status = str(h.get("status", "unknown"))
+        if health_status not in (
+            "ok",
+            "healthy",
+            "ready",
+            "up",
+            "alive",
+            "unknown",
+        ):
+            failures.append(f"health status is {health_status}")
     except Exception as exc:  # noqa: BLE001
-        print(f"   ❌ /health:  ошибка — {exc}")
+        failures.append(f"health check failed: {exc}")
 
-    # 3. Ready check
-    print("🚀 Readiness check:")
     try:
         r = client.ready()
-        print(f"   ✅ /ready:   {r.get('status', 'unknown')}")
+        ready_status = str(r.get("status", "unknown"))
+        if ready_status not in ("ok", "healthy", "ready", "up", "unknown"):
+            failures.append(f"readiness status is {ready_status}")
     except Exception as exc:  # noqa: BLE001
-        print(f"   ❌ /ready:   ошибка — {exc}")
+        failures.append(f"readiness check failed: {exc}")
 
+    if not token:
+        failures.append("token is not configured")
+    if not api_url:
+        failures.append("API URL is not configured")
+
+    as_json = bool(getattr(args, "json", False))
+    if as_json:
+        print_json(
+            {
+                "ok": not failures,
+                "api_url": api_url,
+                "token_set": bool(token),
+                "health": health_status,
+                "ready": ready_status,
+                "failures": failures,
+            }
+        )
+        return 0 if not failures else 1
+
+    print("🩺 Проверка состояния Darkmage CLI\n")
+    print(f"📍 API URL: {api_url}")
+    if token:
+        print(
+            "🔑 Токен:   "
+            + ("*" * (len(token) - 4) + token[-4:] if len(token) > 4 else "***")
+        )
+    else:
+        print("🔑 Токен:   не настроен")
     print()
-    print("Готово к работе." if config.get("base_url") and config.get("token") else "⚠️  Настройте URL и токен через 'darkmage config set'.")
+    print("🏥 Health check:")
+    if health_status is not None and not any(
+        item.startswith("health") for item in failures
+    ):
+        print(f"   ✅ /health:  {health_status}")
+    else:
+        health_error = next(
+            (item for item in failures if item.startswith("health")), "unknown error"
+        )
+        print(f"   ❌ /health:  ошибка — {health_error}")
+    print("🚀 Readiness check:")
+    if ready_status is not None and not any(
+        item.startswith("readiness") or item.startswith("ready")
+        for item in failures
+    ):
+        print(f"   ✅ /ready:   {ready_status}")
+    else:
+        ready_error = next(
+            (
+                item
+                for item in failures
+                if item.startswith("readiness") or item.startswith("ready")
+            ),
+            "unknown error",
+        )
+        print(f"   ❌ /ready:   ошибка — {ready_error}")
+    print()
+    if failures:
+        print("⚠️  Есть проблемы:")
+        for failure in failures:
+            print(f"   • {failure}")
+        return 1
+    print("Готово к работе.")
+    return 0
 
 
 def cmd_completion(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -1971,6 +2370,10 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = ws_sub.add_parser("delete", help="Delete workspace")
     p.add_argument("workspace_id")
+    p.add_argument(
+        "--yes", "-y", action="store_true", default=False,
+        help="Skip the confirmation prompt (required in non-interactive mode)",
+    )
     p.set_defaults(func=cmd_ws_delete)
 
     # files
@@ -2030,6 +2433,10 @@ def build_parser() -> argparse.ArgumentParser:
     p = files_sub.add_parser("rm", help="Remove file from workspace or local")
     p.add_argument("workspace_id")
     p.add_argument("path", help="Local path or ws:/remote/path")
+    p.add_argument(
+        "--yes", "-y", action="store_true", default=False,
+        help="Skip the confirmation prompt (required in non-interactive mode)",
+    )
     p.set_defaults(func=cmd_files_rm)
 
     p = files_sub.add_parser("export", help="Download entire workspace as ZIP")
@@ -2199,6 +2606,18 @@ def build_parser() -> argparse.ArgumentParser:
         default=[],
         help="Image file to attach (PNG/JPEG/WEBP, max 1.5 MB, up to 3)",
     )
+    p.add_argument(
+        "--follow",
+        action="store_true",
+        default=False,
+        help="Follow the run, handling approvals/questions interactively",
+    )
+    p.add_argument(
+        "--no-follow",
+        action="store_true",
+        default=False,
+        help="Create the run and exit even on a terminal",
+    )
     p.set_defaults(func=cmd_run_create)
 
     p = runs_sub.add_parser("get", help="Get run")
@@ -2245,6 +2664,32 @@ def build_parser() -> argparse.ArgumentParser:
     p = runs_sub.add_parser("list", help="List runs in a workspace")
     p.add_argument("workspace_id")
     p.set_defaults(func=cmd_run_list)
+
+    # approvals
+    approvals = sub.add_parser(
+        "approvals", help="Approve or reject pending tool calls"
+    )
+    approvals_sub = approvals.add_subparsers(
+        dest="approvals_command", required=True
+    )
+
+    p = approvals_sub.add_parser(
+        "approve", help="Approve a pending tool call (approval_id from events)"
+    )
+    p.add_argument("tool_call_id")
+    p.add_argument(
+        "--scope",
+        choices=["call", "turn"],
+        default="call",
+        help="call = this tool call only, turn = the rest of the model turn",
+    )
+    p.set_defaults(func=cmd_approval_approve)
+
+    p = approvals_sub.add_parser(
+        "reject", help="Reject a pending tool call"
+    )
+    p.add_argument("tool_call_id")
+    p.set_defaults(func=cmd_approval_reject)
 
     # processes
     proc = sub.add_parser("process", help="Background processes (workspace sandbox)")
@@ -2423,6 +2868,12 @@ def build_parser() -> argparse.ArgumentParser:
     doctor.add_argument(
         "--url", default=None, help="API base URL (overrides config and env)"
     )
+    doctor.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="JSON-вывод",
+    )
     doctor.set_defaults(func=cmd_doctor)
 
     sub.add_parser("login", help="Войти в систему (интерактивно)").set_defaults(func=cmd_login_alias)
@@ -2584,7 +3035,25 @@ def main(argv: list[str] | None = None) -> int:
             import traceback
 
             traceback.print_exc()
-        print_error(str(exc))
+        if getattr(args, "json", False):
+            print_json(
+                {
+                    "schema_version": 1,
+                    "error": {
+                        "message": str(exc),
+                        "status_code": exc.status_code,
+                        "retryable": exc.retryable,
+                    },
+                }
+            )
+            if exc.status_code in (401, 403):
+                exit_code = 3
+            elif exc.status_code in (400, 404, 409, 422):
+                exit_code = 2
+            else:
+                exit_code = 1
+        else:
+            print_error(str(exc))
     finally:
         client.close()
     return exit_code

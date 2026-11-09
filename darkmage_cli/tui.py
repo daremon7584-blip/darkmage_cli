@@ -26,11 +26,13 @@
 
 from __future__ import annotations
 
-import asyncio
 from pathlib import Path
 from typing import Any
 
+from rich.markup import escape
+from rich.text import Text
 from textual.app import App, ComposeResult
+from textual.binding import Binding
 from textual.containers import Container, Horizontal, Vertical, VerticalScroll
 from textual.events import Key
 from textual.reactive import reactive
@@ -47,11 +49,23 @@ from textual.widgets import (
 from textual.widgets.tree import TreeNode
 
 from .client import DarkmageClient, DarkmageError
+from .events import (
+    approval_card,
+    approval_summary,
+    format_diff,
+    question_card,
+    question_items,
+)
 from . import sync as sync_mod
 
 
 class DarkmageTUI(App[None]):
     """Полноценный интерактивный TUI клиент для Darkmage AI platform."""
+
+    BINDINGS = [
+        # Ctrl+C detaches the local stream; it never kills a server-side run.
+        Binding("ctrl+c", "detach_stream", "Detach stream", show=False, priority=True),
+    ]
 
     CSS = """
     #app-container {
@@ -152,6 +166,9 @@ class DarkmageTUI(App[None]):
         self.client: DarkmageClient | None = None
         self._tree_nodes: dict[str, TreeNode] = {}
         self._events_log: list[dict[str, Any]] = []
+        self.pending_approval: dict[str, Any] | None = None
+        self.pending_question: dict[str, Any] | None = None
+        self._stream_worker: Any = None
 
     # ------------------------------------------------------------------
     # Composition
@@ -186,8 +203,8 @@ class DarkmageTUI(App[None]):
                     id="composer",
                 )
                 yield Label(
-                    "  /help  /sync  /files  /run  /status  /quit   •   "
-                    "Ctrl+S синхр · Ctrl+F файлы · Ctrl+R обновить · Ctrl+Q выход",
+                    "  /help  /sync  /files  /run  /approve  /reject  /answer  /status  /quit   •   "
+                    "Ctrl+S синхр · Ctrl+F файлы · Ctrl+R обновить · Ctrl+C отвязать · Ctrl+Q выход",
                     id="composer-hint",
                 )
 
@@ -204,7 +221,8 @@ class DarkmageTUI(App[None]):
         self.client = DarkmageClient(base_url=self.base_url, token=self.token)
         self._update_status("Подключён к API")
         self._update_help(
-            "Ctrl+Q выход  •  Ctrl+S синхронизация  •  Ctrl+F файлы  •  Ctrl+R обновить  •  Ctrl+C стоп ran"
+            "Ctrl+Q выход  •  Ctrl+S синхронизация  •  Ctrl+F файлы  •  "
+            "Ctrl+R обновить  •  Ctrl+C отвязать поток (run продолжается)"
         )
 
         # Загружаем дерево файлов и инфо о воркспейсе
@@ -213,7 +231,7 @@ class DarkmageTUI(App[None]):
 
         # Запускаем стрим событий (если есть run)
         if self.run_id:
-            self.run_worker(self._stream_events(), name="event-stream", exclusive=True)
+            self._start_stream()
         else:
             self._write_event(
                 "system",
@@ -271,24 +289,62 @@ class DarkmageTUI(App[None]):
     # Event streaming (SSE)
     # ------------------------------------------------------------------
 
-    async def _stream_events(self) -> None:
-        if self.client is None:
+    def _start_stream(self) -> None:
+        if self.client is None or not self.run_id:
             return
-        target_id = self.run_id or self.workspace_id
-        try:
-            async for ev in self._aiter_events(target_id):
-                self.call_later(self._display_event, ev)
-        except DarkmageError as exc:
-            self.call_later(self._show_error, f"Ошибка SSE: {exc}")
-        except Exception as exc:  # noqa: BLE001
-            self.call_later(self._show_error, f"Неожиданная ошибка: {exc}")
+        if self._stream_worker is not None:
+            try:
+                self._stream_worker.cancel()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        # The SSE reader is synchronous; keep it off the UI event loop (P1-5).
+        self._stream_worker = self.run_worker(
+            self._stream_events,
+            name=f"event-stream-{self.run_id}",
+            thread=True,
+            exclusive=True,
+        )
 
-    async def _aiter_events(self, target_id: str) -> Any:
-        if self.client is None:
+    def _stream_events(self) -> None:
+        client = self.client
+        run_id = self.run_id
+        if client is None or not run_id:
             return
-        for ev in self.client.run_events_parsed(target_id):
-            yield ev
-            await asyncio.sleep(0)
+        try:
+            for ev in client.run_events_parsed(run_id):
+                if not self._call_from_thread_safe(self._display_event, ev):
+                    return
+        except DarkmageError as exc:
+            self._call_from_thread_safe(self._show_error, f"Ошибка SSE: {exc}")
+        except Exception as exc:  # noqa: BLE001
+            self._call_from_thread_safe(
+                self._show_error, f"Неожиданная ошибка: {exc}"
+            )
+
+    def action_detach_stream(self) -> None:
+        self._detach_stream()
+
+    def _detach_stream(self) -> None:
+        if self._stream_worker is not None:
+            try:
+                self._stream_worker.cancel()
+            except Exception:  # noqa: BLE001, S110
+                pass
+            self._stream_worker = None
+            self._write_event(
+                "system",
+                "Поток отвязан; run продолжается на сервере. "
+                "/run stop — остановить run.",
+            )
+        else:
+            self._write_event("system", "Нет активного потока событий.")
+
+    def _call_from_thread_safe(self, callback: Any, *args: Any) -> bool:
+        try:
+            self.call_from_thread(callback, *args)
+            return True
+        except Exception:  # noqa: BLE001
+            return False
 
     def _display_event(self, ev: dict[str, Any]) -> None:
         log = self.query_one("#event-log", RichLog)
@@ -296,56 +352,106 @@ class DarkmageTUI(App[None]):
         data = ev.get("data", {})
 
         if isinstance(data, dict):
-            detail = ""
             if etype == "assistant.delta":
-                detail = data.get("text", "")
+                log.write(escape(str(data.get("text", ""))))
             elif etype == "tool.requested":
-                detail = f"🔧 [bold cyan]{data.get('name', '')}[/] {data.get('arguments', {})}"
-            elif etype == "tool.output":
-                detail = f"📤 [bold green]вывод:[/] {str(data.get('output', ''))[:300]}"
-            elif etype == "approval.required":
-                detail = (
-                    f"⚠️  [bold yellow]ОДОБРЕНИЕ:[/] {data.get('name', '')} "
-                    f"path={data.get('path', '')}"
+                log.write(
+                    f"🔧 [bold cyan]{escape(str(data.get('name', '')))}[/] "
+                    f"{escape(str(data.get('arguments', {})))}"
                 )
+            elif etype == "tool.output":
+                log.write(
+                    f"📤 [bold green]вывод:[/] "
+                    f"{escape(str(data.get('output', ''))[:300])}"
+                )
+            elif etype == "approval.required":
+                if data.get("auto"):
+                    self.pending_approval = None
+                    log.write(Text(approval_card(data), style="green"))
+                else:
+                    self.pending_approval = data
+                    log.write(Text(approval_card(data), style="bold yellow"))
+                    log.write(
+                        "  /approve  /approve turn  /reject  /diff  "
+                        f"· {escape(approval_summary(data))}"
+                    )
             elif etype == "approval.resolved":
-                detail = f"✅ [bold green]Одобрено:[/] {data.get('decision', '')}"
+                approval_id = data.get("approval_id")
+                if (
+                    self.pending_approval is not None
+                    and approval_id
+                    and str(self.pending_approval.get("approval_id")) == str(approval_id)
+                ):
+                    self.pending_approval = None
+                log.write(
+                    f"✅ [bold green]Одобрение:[/] "
+                    f"{escape(str(data.get('decision', '')))} "
+                    f"scope={escape(str(data.get('scope', 'call')))}"
+                )
             elif etype == "checkpoint.ready":
-                detail = "💾 [bold magenta]Чекпоинт сохранён[/]"
+                log.write("💾 [bold magenta]Чекпоинт сохранён[/]")
             elif etype == "diff.ready":
-                detail = f"📝 [bold magenta]Дифф:[/] {data.get('path', '')}"
+                log.write(Text(format_diff(data), style="magenta"))
             elif etype == "run.completed":
-                detail = f"🏁 [bold green]Завершено:[/] {data.get('finish_reason', '')}"
+                self.pending_approval = None
+                self.pending_question = None
+                log.write(
+                    f"🏁 [bold green]Завершено:[/] "
+                    f"{escape(str(data.get('finish_reason', '')))}"
+                )
             elif etype == "run.failed":
-                detail = f"💥 [bold red]Ошибка:[/] {data.get('error', '')}"
+                self.pending_approval = None
+                self.pending_question = None
+                log.write(
+                    f"💥 [bold red]Ошибка:[/] "
+                    f"{escape(str(data.get('error', '')))}"
+                )
             elif etype == "run.cancelled":
-                detail = "🛑 [bold red]Отменено[/]"
+                self.pending_approval = None
+                self.pending_question = None
+                log.write("🛑 [bold red]Отменено[/]")
             elif etype == "user.message":
-                detail = f"[bold white][Вы][/] {data.get('text', '')}"
+                log.write(f"[bold white][Вы][/] {escape(str(data.get('text', '')))}")
             elif etype == "context.compacted":
-                detail = (
+                log.write(
                     f"🗜 [bold blue]Компактировка:[/] "
-                    f"{data.get('dropped_messages', '')} сообщений удалено"
+                    f"{escape(str(data.get('dropped_messages', '')))} сообщений удалено"
                 )
             elif etype == "agent.question":
-                detail = f"❓ [bold yellow]Вопрос:[/] {data.get('question', '')}"
+                self.pending_question = data
+                log.write(Text(question_card(data), style="bold yellow"))
+                log.write(
+                    "  Ответьте в компоузере или /answer <текст> (несколько — через |)"
+                )
             elif etype == "agent.answer":
-                detail = f"💬 [bold yellow]Ответ:[/] {data.get('answers', [])}"
+                question_id = data.get("question_id")
+                if (
+                    self.pending_question is not None
+                    and question_id
+                    and str(self.pending_question.get("question_id")) == str(question_id)
+                ):
+                    self.pending_question = None
+                log.write(
+                    f"💬 [bold yellow]Ответ:[/] "
+                    f"{escape(str(data.get('answers', [])))}"
+                )
             else:
-                detail = str(data)[:300]
-            log.write(f"[{etype}] {detail}")
+                log.write(f"[{escape(etype)}] {escape(str(data)[:300])}")
         else:
-            log.write(f"[{etype}] {data}")
+            log.write(f"[{escape(etype)}] {escape(str(data))}")
 
         self._events_log.append(ev)
+        # Bound memory for a long-lived attached run.
+        if len(self._events_log) > 5000:
+            del self._events_log[:1000]
 
     def _write_event(self, etype: str, detail: str) -> None:
         log = self.query_one("#event-log", RichLog)
-        log.write(f"[{etype}] {detail}")
+        log.write(f"[{etype}] {escape(detail)}")
 
     def _show_error(self, msg: str) -> None:
         log = self.query_one("#event-log", RichLog)
-        log.write(f"[bold red][ОШИБКА][/] {msg}")
+        log.write(f"[bold red][ОШИБКА][/] {escape(msg)}")
 
     # ------------------------------------------------------------------
     # Status bar
@@ -380,7 +486,9 @@ class DarkmageTUI(App[None]):
         if text.startswith("/"):
             await self._handle_command(text)
         else:
-            self.query_one("#event-log", RichLog).write(f"[bold white][Вы][/] {text}")
+            self.query_one("#event-log", RichLog).write(
+                f"[bold white][Вы][/] {escape(text)}"
+            )
             await self._send_message(text)
 
     async def _handle_command(self, text: str) -> None:
@@ -399,6 +507,10 @@ class DarkmageTUI(App[None]):
                 "[bold]Доступные команды:[/]\n"
                 "  /run create <prompt>  — создать ran\n"
                 "  /run stop             — остановить ran\n"
+                "  /approve [turn]       — одобрить ожидающий tool call\n"
+                "  /reject               — отклонить ожидающий tool call\n"
+                "  /answer <a|b|...>     — ответить на вопрос агента\n"
+                "  /diff                 — показать diff ожидающего approval\n"
                 "  /sync pull            — скачать файлы из воркспейса\n"
                 "  /sync push            — загрузить файлы в воркспейс\n"
                 "  /sync diff            — показать различия\n"
@@ -416,6 +528,22 @@ class DarkmageTUI(App[None]):
             self.run_worker(self._cmd_run(args), name="cmd-run")
             return
 
+        if cmd == "approve":
+            self.run_worker(self._cmd_approve(args), name="cmd-approve")
+            return
+
+        if cmd == "reject":
+            self.run_worker(self._cmd_reject(args), name="cmd-reject")
+            return
+
+        if cmd == "answer":
+            self.run_worker(self._cmd_answer(args), name="cmd-answer")
+            return
+
+        if cmd == "diff":
+            self._show_pending_diff()
+            return
+
         if cmd == "sync":
             self.run_worker(self._cmd_sync(args), name="cmd-sync")
             return
@@ -424,11 +552,14 @@ class DarkmageTUI(App[None]):
             self.run_worker(self._cmd_files(args), name="cmd-files")
             return
 
-        log.write(f"[bold red]Неизвестная команда:[/] /{cmd}")
+        log.write(f"[bold red]Неизвестная команда:[/] /{escape(cmd)}")
 
     async def _send_message(self, text: str) -> None:
         if self.client is None or not self.run_id:
             self._show_error("Нет активного ran. Создайте его: /run create <prompt>")
+            return
+        if self.pending_question is not None:
+            await self._cmd_answer([text])
             return
         try:
             self.client.run_message(self.run_id, text)
@@ -446,17 +577,35 @@ class DarkmageTUI(App[None]):
         try:
             ws = self.client.workspace_get(self.workspace_id)
             log.write(
-                f"[bold]Воркспейс:[/] {ws.get('name', '—')}  "
-                f"[bold]Статус:[/] {ws.get('status', '—')}  "
-                f"[bold]Режим:[/] {ws.get('approval_mode', '—')}"
+                f"[bold]Воркспейс:[/] {escape(str(ws.get('name', '—')))}  "
+                f"[bold]Статус:[/] {escape(str(ws.get('status', '—')))}  "
+                f"[bold]Режим:[/] {escape(str(ws.get('approval_mode', '—')))}"
             )
         except DarkmageError as exc:
             self._show_error(f"Ошибка статуса: {exc}")
 
     async def _cmd_run(self, args: list[str]) -> None:
         log = self.query_one("#event-log", RichLog)
-        if not args or args[0] != "create":
-            log.write("[bold red]Использование:[/] /run create <prompt>")
+        sub = args[0].lower() if args else "create"
+
+        if sub == "stop":
+            if self.client is None or not self.run_id:
+                log.write("[bold red]Нет активного ran.[/]")
+                return
+            try:
+                data = self.client.run_stop(self.run_id)
+                log.write(
+                    f"[bold green]🛑 Run остановлен:[/] "
+                    f"{escape(str(data.get('id', self.run_id)))}"
+                )
+            except DarkmageError as exc:
+                self._show_error(f"Не удалось остановить ran: {exc}")
+            return
+
+        if sub != "create":
+            log.write(
+                "[bold red]Использование:[/] /run create <prompt> | /run stop"
+            )
             return
         prompt = " ".join(args[1:])
         if not prompt:
@@ -481,11 +630,121 @@ class DarkmageTUI(App[None]):
             run = self.client.run_create(session_id, prompt)
             run_id = run.get("id")
             self.run_id = run_id
-            log.write(f"[bold green]✅ Ran создан:[/] {run_id}")
+            log.write(f"[bold green]✅ Ran создан:[/] {escape(str(run_id))}")
             # Запускаем стрим событий для нового ran
-            self.run_worker(self._stream_events(), name=f"event-stream-{run_id}", exclusive=True)
+            self._start_stream()
         except DarkmageError as exc:
             self._show_error(f"Ошибка создания ran: {exc}")
+
+    async def _cmd_approve(self, args: list[str]) -> None:
+        log = self.query_one("#event-log", RichLog)
+        if self.client is None:
+            return
+        if self.pending_approval is None:
+            log.write("[bold red]Нет ожидающего approval.[/]")
+            return
+        approval_id = str(self.pending_approval.get("approval_id") or "")
+        if not approval_id:
+            self._show_error("В событии approval нет approval_id")
+            return
+        scope = (
+            "turn"
+            if args and args[0].lower() in ("turn", "rest", "all")
+            else "call"
+        )
+        try:
+            result = self.client.tool_call_approve(approval_id, scope)
+        except DarkmageError as exc:
+            if exc.status_code == 409:
+                self.pending_approval = None
+                log.write(
+                    "[bold yellow]Approval уже разрешён другим клиентом; "
+                    "продолжаем поток.[/]"
+                )
+                return
+            self._show_error(f"Не удалось одобрить {approval_id}: {exc}")
+            return
+        self.pending_approval = None
+        log.write(
+            f"[bold green]✅ Одобрено:[/] {escape(str(result.get('name', 'tool call')))} "
+            f"({escape(approval_id)}) scope={escape(scope)}"
+        )
+
+    async def _cmd_reject(self, args: list[str]) -> None:
+        log = self.query_one("#event-log", RichLog)
+        if self.client is None:
+            return
+        if self.pending_approval is None:
+            log.write("[bold red]Нет ожидающего approval.[/]")
+            return
+        approval_id = str(self.pending_approval.get("approval_id") or "")
+        if not approval_id:
+            self._show_error("В событии approval нет approval_id")
+            return
+        try:
+            result = self.client.tool_call_reject(approval_id)
+        except DarkmageError as exc:
+            if exc.status_code == 409:
+                self.pending_approval = None
+                log.write(
+                    "[bold yellow]Approval уже разрешён другим клиентом; "
+                    "продолжаем поток.[/]"
+                )
+                return
+            self._show_error(f"Не удалось отклонить {approval_id}: {exc}")
+            return
+        self.pending_approval = None
+        log.write(
+            f"[bold yellow]⛔ Отклонено:[/] "
+            f"{escape(str(result.get('name', 'tool call')))} ({escape(approval_id)})"
+        )
+
+    async def _cmd_answer(self, args: list[str]) -> None:
+        log = self.query_one("#event-log", RichLog)
+        if self.client is None or not self.run_id:
+            self._show_error("Нет активного ran.")
+            return
+        if self.pending_question is None:
+            log.write("[bold red]Нет ожидающего вопроса агента.[/]")
+            return
+        question_id = str(self.pending_question.get("question_id") or "")
+        items = question_items(self.pending_question)
+        if not question_id or not items:
+            self._show_error("В событии agent.question нет question_id/questions")
+            return
+        text = " ".join(args).strip()
+        if not text:
+            log.write("[bold red]Использование:[/] /answer <ответ> (несколько — a|b)")
+            return
+        if len(items) > 1:
+            answers = [part.strip() for part in text.split("|") if part.strip()]
+            if len(answers) != len(items):
+                log.write(
+                    f"[bold red]Нужно {len(items)} ответа(ов), разделённых |.[/]"
+                )
+                return
+        else:
+            answers = [text]
+        try:
+            self.client.run_answer(self.run_id, question_id, answers)
+        except DarkmageError as exc:
+            if exc.status_code == 409:
+                self.pending_question = None
+                log.write(
+                    "[bold yellow]Вопрос уже отвечен; продолжаем поток.[/]"
+                )
+                return
+            self._show_error(f"Не удалось ответить: {exc}")
+            return
+        self.pending_question = None
+        log.write(f"[bold green]💬 Ответ отправлен:[/] {escape(str(answers))}")
+
+    def _show_pending_diff(self) -> None:
+        log = self.query_one("#event-log", RichLog)
+        if self.pending_approval is None:
+            log.write("[bold red]Нет ожидающего approval с diff.[/]")
+            return
+        log.write(Text(format_diff(self.pending_approval, max_lines=1000), style="magenta"))
 
     async def _cmd_sync(self, args: list[str]) -> None:
         log = self.query_one("#event-log", RichLog)
@@ -597,12 +856,11 @@ class DarkmageTUI(App[None]):
         elif event.key == "ctrl+r":
             self.run_worker(self._load_file_tree(), name="file-tree-refresh")
         elif event.key == "ctrl+c":
-            if self.run_id and self.client:
-                try:
-                    self.client.run_stop(self.run_id)
-                    self._write_event("system", "Ran остановлен пользователем")
-                except DarkmageError as exc:
-                    self._show_error(f"Не удалось остановить ran: {exc}")
+            # Never kill a server-side run from a stray Ctrl+C. Detach the
+            # local stream; /run stop is the explicit destructive action.
+            event.prevent_default()
+            event.stop()
+            self._detach_stream()
 
     async def on_unmount(self) -> None:
         if self.client:

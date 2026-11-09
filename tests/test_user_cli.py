@@ -15,6 +15,7 @@ import subprocess
 import sys
 import tempfile
 from pathlib import Path
+from unittest.mock import patch
 
 from darkmage_cli.cli import _color_status, _format_event
 from darkmage_cli.client import DarkmageClient
@@ -52,7 +53,7 @@ def check(name, condition, detail=""):
         print(f"  ✅ {name}")
     else:
         FAILURES += 1
-        print(f"  ❌ {name}: {detail}")
+        raise AssertionError(f"{name}: {detail}")
 
 
 def test_help():
@@ -127,7 +128,7 @@ def test_doctor():
     """Test doctor command."""
     print("\n🩺 Тест 3: Doctor")
     rc, out, _err = run_cmd(["doctor", "--url", "http://localhost:1"])
-    check("doctor runs", rc in (0, 1), f"rc={rc}")
+    check("doctor fails non-zero on unreachable API", rc == 1, f"rc={rc}")
     check("doctor shows API URL", "API URL" in out)
     check("doctor shows health", "health" in out.lower())
     check("doctor shows ready", "ready" in out.lower())
@@ -169,7 +170,8 @@ def test_run_events_parsing():
         "cancelled": "\033[1;31m",
     }
     for status, color in statuses.items():
-        colored = _color_status(status)
+        with patch.object(sys.stdout, "isatty", return_value=True):
+            colored = _color_status(status)
         check(f"_color_status {status}", color in colored)
 
 
@@ -194,6 +196,7 @@ def test_client_methods():
         "session_create", "session_list",
         "run_create", "run_get", "run_message", "run_answer", "run_context",
         "run_revert", "run_review", "run_stop", "run_events", "run_list",
+        "tool_call_approve", "tool_call_reject",
         "process_start", "process_output", "process_stop",
         "payment_create", "payment_list",
         "admin_status",
@@ -210,8 +213,11 @@ def test_client_methods():
 def test_exit_codes():
     """Test exit codes for various scenarios."""
     print("\n🚪 Тест 7: Exit codes")
-    rc, _out, _err = run_cmd([])
-    check("no args exits non-zero", rc != 0, f"rc={rc}")
+    # Use a fresh HOME: TEST_HOME already has a token from test_config, which
+    # would send the no-args path into cmd_start instead of auth.
+    with tempfile.TemporaryDirectory() as fresh_home:
+        rc, _out, _err = run_cmd([], env={"HOME": fresh_home})
+    check("no args exits non-zero in a fresh home", rc != 0, f"rc={rc}")
 
     rc, _out, _err = run_cmd(["auth"])
     check("auth without subcommand exits non-zero", rc != 0, f"rc={rc}")
