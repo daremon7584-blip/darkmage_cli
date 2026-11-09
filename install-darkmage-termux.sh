@@ -12,8 +12,8 @@
 
 set -e
 
-REPO_URL="https://github.com/daremon7584-blip/darkmage_cli.git"
-REPO_DIR="$HOME/darkmage_cli"
+REPO_URL="https://github.com/daremon7584-blip/arkost_cli.git"
+REPO_DIR="$HOME/arkost_cli"
 SERVER="${1:-${DARKMAGE_SERVER:-}}"
 
 validate_server() {
@@ -73,7 +73,7 @@ echo "▶ Установка Python зависимостей..."
 python -m pip install httpx cryptography textual websockets pydantic-settings
 
 # 4. Клонируем или обновляем репозиторий (без удаления каталога)
-echo "▶ Клонирование/обновление darkmage_cli..."
+echo "▶ Клонирование/обновление arkost_cli..."
 if [ -e "$REPO_DIR" ]; then
     if [ ! -d "$REPO_DIR/.git" ]; then
         echo "❌ $REPO_DIR уже существует, но это не git-клон." >&2

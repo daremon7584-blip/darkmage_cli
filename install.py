@@ -20,8 +20,8 @@ from pathlib import Path
 import urllib.request
 import urllib.error
 
-REPO_URL = "https://github.com/daremon7584-blip/darkmage_cli.git"
-REPO_DIRNAME = "darkmage_cli"
+REPO_URL = "https://github.com/daremon7584-blip/arkost_cli.git"
+REPO_DIRNAME = "arkost_cli"
 
 # Only a DNS name, IPv4 address, or `localhost` is accepted. This prevents
 # injecting shell/rc syntax or URL components through the server argument.
@@ -135,11 +135,11 @@ def clone_repo() -> Path:
                 "   Переместите или удалите его вручную и запустите установку снова."
             )
             sys.exit(2)
-        print("▶ Обновление существующего клона darkmage_cli (git pull --ff-only)...")
+        print("▶ Обновление существующего клона arkost_cli (git pull --ff-only)...")
         run(["git", "-C", str(repo_dir), "pull", "--ff-only"])
         return repo_dir
 
-    print("▶ Клонирование darkmage_cli...")
+    print("▶ Клонирование arkost_cli...")
     run(["git", "clone", REPO_URL, str(repo_dir)])
     return repo_dir
 

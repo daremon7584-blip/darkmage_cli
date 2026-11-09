@@ -1,6 +1,6 @@
 # darkmage-cli
 
-Custom CLI for the [Darkmage AI](https://github.com/) platform (FastAPI backend at `/root/saas-backend`).
+Arkost CLI (Darkmage engine) for the [Arkost AI](https://github.com/daremon7584-blip/arkost_ai) platform (FastAPI backend at `/root/saas-backend`).
 
 ## Install
 
