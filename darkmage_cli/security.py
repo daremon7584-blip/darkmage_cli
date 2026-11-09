@@ -10,6 +10,7 @@ from __future__ import annotations
 
 import json
 import os
+import tempfile
 from pathlib import Path
 from typing import Any
 
@@ -19,6 +20,94 @@ CONFIG_DIR = Path.home() / ".darkmage-cli"
 CONFIG_FILE = CONFIG_DIR / "config.json"
 KEY_FILE = CONFIG_DIR / ".key"
 HISTORY_FILE = CONFIG_DIR / "history.json"
+
+# Placeholder written by `config export` instead of a decrypted secret.
+REDACTED = "***REDACTED***"
+
+_SECRET_KEY_MARKERS = (
+    "token",
+    "password",
+    "secret",
+    "api_key",
+    "apikey",
+    "authorization",
+    "credential",
+    "private_key",
+)
+
+
+def is_secret_key(key: str) -> bool:
+    """Return True when a config key holds a credential."""
+    normalized = key.lower().replace("-", "_")
+    return any(marker in normalized for marker in _SECRET_KEY_MARKERS)
+
+
+def is_redacted_value(value: Any) -> bool:
+    return isinstance(value, str) and value == REDACTED
+
+
+def _redact_nested(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {
+            key: REDACTED if is_secret_key(str(key)) and item else _redact_nested(item)
+            for key, item in value.items()
+        }
+    if isinstance(value, list):
+        return [_redact_nested(item) for item in value]
+    return value
+
+
+def redact_config(config: dict[str, Any]) -> dict[str, Any]:
+    """Return a copy of *config* with all credential values replaced.
+
+    The token is never copied into CLI output, logs, or exported files.
+    """
+    return {
+        key: REDACTED if is_secret_key(str(key)) and value else _redact_nested(value)
+        for key, value in config.items()
+    }
+
+
+def strip_redacted(config: dict[str, Any]) -> dict[str, Any]:
+    """Drop redacted placeholders so importing an export cannot erase secrets."""
+    return {
+        key: value
+        for key, value in config.items()
+        if not (is_secret_key(str(key)) and is_redacted_value(value))
+    }
+
+
+def _write_private(path: str | Path, write: Any) -> None:
+    target = Path(path)
+    fd, tmp_name = tempfile.mkstemp(
+        prefix=f".{target.name}.", suffix=".tmp", dir=str(target.parent)
+    )
+    try:
+        os.fchmod(fd, 0o600)
+        with os.fdopen(fd, "w", encoding="utf-8") as handle:
+            write(handle)
+            handle.flush()
+            os.fsync(handle.fileno())
+        os.replace(tmp_name, target)
+        os.chmod(target, 0o600)
+    finally:
+        try:
+            os.unlink(tmp_name)
+        except FileNotFoundError:
+            pass
+
+
+def write_private_json(path: str | Path, data: Any) -> None:
+    """Atomically write JSON with owner-only (0600) permissions."""
+    _write_private(
+        path,
+        lambda handle: json.dump(data, handle, ensure_ascii=False, indent=2),
+    )
+
+
+def write_private_text(path: str | Path, text: str) -> None:
+    """Atomically write text with owner-only (0600) permissions."""
+    _write_private(path, lambda handle: handle.write(text))
 
 
 def _get_or_create_key() -> bytes:

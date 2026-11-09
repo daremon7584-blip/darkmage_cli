@@ -558,14 +558,24 @@ def test_mcp_call_no_workspace(mock_request):
 # ---------------------------------------------------------------------------
 
 
+def _isolate_config(monkeypatch, tmp_path):
+    """Point every security path at a temp dir (config.py re-exports constants)."""
+    from darkmage_cli import security
+
+    monkeypatch.setattr(security, "CONFIG_DIR", tmp_path)
+    monkeypatch.setattr(security, "CONFIG_FILE", tmp_path / "config.json")
+    monkeypatch.setattr(security, "KEY_FILE", tmp_path / ".key")
+    monkeypatch.setattr(security, "HISTORY_FILE", tmp_path / "history.json")
+
+
 def test_config_show_json(capsys, monkeypatch, tmp_path):
     from darkmage_cli.config import save_config
 
-    # Перенаправить конфиг во временную директорию
-    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    _isolate_config(monkeypatch, tmp_path)
     save_config({"base_url": "http://example.com:8000", "token": "secret-token-12345"})
 
     from darkmage_cli.cli import cmd_config_show
+    from darkmage_cli.security import REDACTED
 
     class Args:
         json = True
@@ -574,13 +584,14 @@ def test_config_show_json(capsys, monkeypatch, tmp_path):
     cmd_config_show(Args(), client)
     captured = capsys.readouterr()
     assert "http://example.com:8000" in captured.out
-    assert "secret-token" in captured.out
+    assert "secret-token" not in captured.out
+    assert REDACTED in captured.out
 
 
 def test_config_show_empty(capsys, monkeypatch, tmp_path):
     from darkmage_cli.config import save_config
 
-    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    _isolate_config(monkeypatch, tmp_path)
     save_config({})
 
     from darkmage_cli.cli import cmd_config_show
@@ -597,7 +608,7 @@ def test_config_show_empty(capsys, monkeypatch, tmp_path):
 def test_config_set_url_and_token(monkeypatch, tmp_path):
     from darkmage_cli.config import load_config, save_config
 
-    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    _isolate_config(monkeypatch, tmp_path)
     save_config({})
 
     from darkmage_cli.cli import cmd_config_set
@@ -617,7 +628,7 @@ def test_config_set_url_and_token(monkeypatch, tmp_path):
 def test_config_set_no_changes(capsys, monkeypatch, tmp_path):
     from darkmage_cli.config import save_config
 
-    monkeypatch.setattr("darkmage_cli.config.CONFIG_FILE", tmp_path / "config.json")
+    _isolate_config(monkeypatch, tmp_path)
     save_config({})
 
     from darkmage_cli.cli import cmd_config_set
