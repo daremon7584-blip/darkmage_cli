@@ -306,6 +306,43 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- global sessions (one workspace per user, sessions are the projects) ---
+    def session_new(self, title: str | None = None) -> dict:
+        body: dict[str, Any] = {}
+        if title is not None:
+            body["title"] = title
+        resp = self._request("POST", "/sessions", json=body)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def session_all(self, limit: int = 50, archived: bool = False) -> list[dict]:
+        resp = self._request(
+            "GET", "/sessions", params={"limit": limit, "archived": str(archived).lower()}
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def session_runs(self, session_id: str) -> list[dict]:
+        resp = self._request("GET", f"/sessions/{session_id}/runs")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def session_files(self, session_id: str, path: str = ".") -> dict:
+        resp = self._request(
+            "GET", f"/sessions/{session_id}/files", params={"path": path}
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def session_read_file(self, session_id: str, path: str) -> dict:
+        resp = self._request(
+            "GET",
+            f"/sessions/{session_id}/files/content",
+            params={"path": path},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     # --- runs ---
     def run_create(
         self,
@@ -444,6 +481,11 @@ class DarkmageClient:
         resp = self._request(
             "GET", f"/workspaces/{workspace_id}/runs"
         )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def run_list_for_session(self, session_id: str) -> list[dict]:
+        resp = self._request("GET", f"/sessions/{session_id}/runs")
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 

@@ -68,6 +68,13 @@ darkmage files search <id> <query> [path]
 darkmage session create <workspace_id> [--title "Task"]
 darkmage session list <workspace_id>
 
+# Сессии (новый интерфейс: одна рабочая область на пользователя)
+darkmage session new [--title "Моя сессия"]     # создать сессию (песочница запустится сама)
+darkmage session all [--limit 50] [--archived]  # все сессии пользователя
+darkmage session runs <session_id>             # запуски сессии
+darkmage session files <session_id> [path]     # файлы сессии
+darkmage session read <session_id> <path>      # прочитать файл сессии
+
 darkmage run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
 darkmage run get <run_id>
 darkmage run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)

@@ -712,6 +712,39 @@ def cmd_session_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.session_list(args.workspace_id, args.limit))
 
 
+def cmd_session_new(args: argparse.Namespace, client: DarkmageClient) -> None:
+    print_json(client.session_new(args.title))
+
+
+def cmd_session_all(args: argparse.Namespace, client: DarkmageClient) -> None:
+    sessions = client.session_all(args.limit, args.archived)
+    if args.json or not sys.stdout.isatty():
+        print_json(sessions)
+        return
+    print(f"{'ID':<38} {'Название':<40} {'Создана':<20}")
+    print("-" * 100)
+    for s in sessions:
+        print(f"{s.get('id', ''):<38} {(s.get('title') or 'Сессия')[:40]:<40} {s.get('created_at', '')[:19]}")
+    if not sessions:
+        print("Сессий нет. Создайте: darkmage session new --title \"Моя сессия\"")
+
+
+def cmd_session_runs(args: argparse.Namespace, client: DarkmageClient) -> None:
+    print_json(client.session_runs(args.session_id))
+
+
+def cmd_session_files(args: argparse.Namespace, client: DarkmageClient) -> None:
+    print_json(client.session_files(args.session_id, args.path))
+
+
+def cmd_session_read(args: argparse.Namespace, client: DarkmageClient) -> None:
+    data = client.session_read_file(args.session_id, args.path)
+    if args.json:
+        print_json(data)
+    else:
+        print(data.get("content", ""))
+
+
 # ANSI colors for pretty SSE output (only used when stdout is a TTY).
 _COLORS = {
     "run.started": "\033[1;34m",      # bold blue
@@ -938,7 +971,7 @@ def cmd_admin_status(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.admin_status()
     balance = data.get("openrouter_balance_usd")
     low = data.get("openrouter_balance_low")
-    low_threshold = data.get("openrouter_balance_low_usd")
+    low_threshold = data.get("openrouter_low_balance_usd")
     print("Статус сервера (админ):")
     if balance is None:
         print("  Баланс OpenRouter: недоступен")
@@ -1391,9 +1424,10 @@ def cmd_doctor(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Проверка окружения и подключения к серверу Darkmage."""
     print("🩺 Проверка состояния Darkmage CLI\n")
 
-    # 1. Конфигурация
+    # 1. Конфигурация (env vars win over the saved file, like every other command)
+    from .config import get_base_url
     config = load_config()
-    api_url = args.url or config.get("base_url", "http://localhost:8000")
+    api_url = args.url or get_base_url()
     token = get_token()
 
     print(f"📍 API URL: {api_url}")
@@ -1849,10 +1883,33 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("--title", default=None)
     p.set_defaults(func=cmd_session_create)
 
-    p = sess_sub.add_parser("list", help="List sessions")
+    p = sess_sub.add_parser("list", help="List sessions of a workspace")
     p.add_argument("workspace_id")
     p.add_argument("--limit", type=int, default=50)
     p.set_defaults(func=cmd_session_list)
+
+    p = sess_sub.add_parser("new", help="Создать новую сессию (в вашей рабочей области)")
+    p.add_argument("--title", default=None)
+    p.set_defaults(func=cmd_session_new)
+
+    p = sess_sub.add_parser("all", help="Все сессии пользователя")
+    p.add_argument("--limit", type=int, default=50)
+    p.add_argument("--archived", action="store_true")
+    p.set_defaults(func=cmd_session_all)
+
+    p = sess_sub.add_parser("runs", help="Запуски сессии")
+    p.add_argument("session_id")
+    p.set_defaults(func=cmd_session_runs)
+
+    p = sess_sub.add_parser("files", help="Файлы сессии")
+    p.add_argument("session_id")
+    p.add_argument("path", nargs="?", default=".")
+    p.set_defaults(func=cmd_session_files)
+
+    p = sess_sub.add_parser("read", help="Прочитать файл сессии")
+    p.add_argument("session_id")
+    p.add_argument("path")
+    p.set_defaults(func=cmd_session_read)
 
     # repl
     repl = sub.add_parser("repl", help="Интерактивный режим (REPL)")
