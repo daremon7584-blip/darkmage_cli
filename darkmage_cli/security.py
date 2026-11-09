@@ -10,9 +10,11 @@ from __future__ import annotations
 
 import json
 import os
+import sys
 import tempfile
 from pathlib import Path
-from typing import Any
+from typing import Any, TextIO
+from urllib.parse import urlparse
 
 from cryptography.fernet import Fernet
 
@@ -188,9 +190,14 @@ def clear_config() -> None:
 
 
 def is_configured() -> bool:
-    """Проверяет, настроен ли клиент (есть ли токен и базовый URL)."""
-    config = load_config()
-    return bool(config.get("token") and config.get("base_url"))
+    """Backward-compatible alias for :func:`darkmage_cli.config.is_configured`.
+
+    Keeping a single implementation avoids the old split semantics where
+    ``security`` ignored environment tokens and the default base URL.
+    """
+    from .config import is_configured as _is_configured
+
+    return _is_configured()
 
 
 def get_secure_config() -> dict[str, Any]:
@@ -208,14 +215,32 @@ def mask_token(token: str | None) -> str:
 
 
 def is_secure_connection(url: str) -> bool:
-    """Проверяет, использует ли URL безопасное соединение (HTTPS)."""
-    return url.startswith(("https://", "http://localhost", "http://127.0.0.1"))
+    """Проверяет, использует ли URL безопасное соединение (HTTPS).
+
+    Loopback hosts are treated as safe for local development. Compare the
+    parsed hostname instead of using ``startswith`` so a URL such as
+    ``http://localhost.evil.example`` is still reported as insecure.
+    """
+    parsed = urlparse(url)
+    if parsed.scheme == "https":
+        return True
+    if parsed.scheme != "http":
+        return False
+    hostname = (parsed.hostname or "").lower()
+    return hostname in {"localhost", "127.0.0.1", "::1"} or hostname.endswith(
+        ".localhost"
+    )
 
 
-def warn_insecure_url(url: str) -> None:
-    """Выводит предупреждение, если используется небезопасное соединение."""
+def warn_insecure_url(url: str, *, file: TextIO | None = None) -> None:
+    """Выводит предупреждение, если используется небезопасное соединение.
+
+    Warnings go to stderr by default so JSON/one-shot stdout stays machine
+    readable. The function is advisory and never changes command behaviour.
+    """
     if not is_secure_connection(url):
         print(
             "⚠️  ПРЕДУПРЕЖДЕНИЕ: Соединение не зашифровано (HTTP вместо HTTPS). "
-            "Токен может быть перехвачен. Используйте HTTPS для продакшена."
+            "Токен может быть перехвачен. Используйте HTTPS для продакшена.",
+            file=file or sys.stderr,
         )

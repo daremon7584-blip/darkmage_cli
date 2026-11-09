@@ -16,6 +16,28 @@ TERMINAL_RUN_STATUSES = frozenset({"completed", "failed", "cancelled"})
 TERMINAL_EVENTS = frozenset({"run.completed", "run.failed", "run.cancelled"})
 
 
+def _chat_events_from_payload(payload: Any) -> Iterator[dict[str, Any]]:
+    """Normalize an OpenAI-style chat chunk/completion into CLI events."""
+    if not isinstance(payload, dict):
+        return
+    for choice in payload.get("choices") or []:
+        if not isinstance(choice, dict):
+            continue
+        text = None
+        delta = choice.get("delta")
+        if isinstance(delta, dict):
+            text = delta.get("content")
+        if text is None:
+            message = choice.get("message")
+            if isinstance(message, dict):
+                text = message.get("content")
+        if text:
+            yield {"type": "delta", "text": str(text)}
+    usage = payload.get("usage")
+    if isinstance(usage, dict):
+        yield {"type": "usage", "usage": usage}
+
+
 class DarkmageError(Exception):
     """API/transport error with enough context for retry decisions."""
 
@@ -635,6 +657,20 @@ class DarkmageClient:
         temperature: float = 0.7,
         max_tokens: int | None = None,
     ) -> dict:
+        body = self._chat_body(messages, model, temperature, max_tokens)
+        resp = self._request("POST", "/chat/completion", json=body)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    @staticmethod
+    def _chat_body(
+        messages: list[dict[str, str]],
+        model: str | None,
+        temperature: float,
+        max_tokens: int | None,
+        *,
+        stream: bool = False,
+    ) -> dict[str, Any]:
         body: dict[str, Any] = {
             "messages": messages,
             "temperature": temperature,
@@ -643,9 +679,83 @@ class DarkmageClient:
             body["model"] = model
         if max_tokens is not None:
             body["max_tokens"] = max_tokens
-        resp = self._request("POST", "/chat/completion", json=body)
-        self._raise_for_status(resp)
-        return self._json_or_text(resp)
+        if stream:
+            body["stream"] = True
+        return body
+
+    def chat_completion_stream(
+        self,
+        messages: list[dict[str, str]],
+        model: str | None = None,
+        temperature: float = 0.7,
+        max_tokens: int | None = None,
+    ) -> Iterator[dict[str, Any]]:
+        """Yield normalized chat deltas as they arrive.
+
+        The server currently returns a regular JSON completion; newer/streaming
+        deployments may return OpenAI-style ``text/event-stream`` chunks. Both
+        are handled, so the command works against either version. Events are
+        ``{"type": "delta", "text": ...}``, ``{"type": "usage", "usage": {...}}``
+        and a final ``{"type": "done"}``.
+        """
+        body = self._chat_body(
+            messages, model, temperature, max_tokens, stream=True
+        )
+        headers = dict(self._headers())
+        headers["Accept"] = "text/event-stream, application/json"
+        url = f"{self.base_url}/chat/completion"
+        try:
+            with self._client.stream(
+                "POST",
+                url,
+                json=body,
+                headers=headers,
+            ) as resp:
+                if resp.status_code >= 400:
+                    # Streaming responses must be read before
+                    # _raise_for_status can inspect a JSON error body.
+                    resp.read()
+                    self._raise_for_status(resp)
+                content_type = resp.headers.get("content-type", "").lower()
+                if "text/event-stream" in content_type:
+                    for raw_line in resp.iter_lines():
+                        line = raw_line.strip()
+                        if not line or line.startswith(":"):
+                            continue
+                        if line.startswith("data:"):
+                            data = line[5:].strip()
+                            if data == "[DONE]":
+                                break
+                            try:
+                                payload = json.loads(data)
+                            except json.JSONDecodeError:
+                                continue
+                        elif line.startswith("{"):
+                            try:
+                                payload = json.loads(line)
+                            except json.JSONDecodeError:
+                                continue
+                        else:
+                            continue
+                        yield from _chat_events_from_payload(payload)
+                else:
+                    resp.read()
+                    try:
+                        payload = resp.json()
+                    except ValueError as exc:
+                        raise DarkmageError(
+                            "Chat server returned a non-JSON response"
+                        ) from exc
+                    if not isinstance(payload, dict):
+                        raise DarkmageError(
+                            "Chat server returned an invalid response"
+                        )
+                    yield from _chat_events_from_payload(payload)
+        except (httpx.RequestError, httpx.StreamError, OSError) as exc:
+            raise DarkmageError(
+                f"Cannot reach {url}: {exc}", retryable=True
+            ) from exc
+        yield {"type": "done"}
 
     # --- health ---
     def health(self) -> dict:

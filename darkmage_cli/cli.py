@@ -2,10 +2,14 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import io
 import json
 import os
+import re
 import shlex
+import shutil
 import sys
+import threading
 from datetime import datetime
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
@@ -26,6 +30,7 @@ from .security import (
     mask_token,
     redact_config,
     strip_redacted,
+    warn_insecure_url,
     write_private_json,
     write_private_text,
 )
@@ -222,6 +227,154 @@ def cmd_memory_put(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.memory_put(args.content))
 
 
+# ---------------------------------------------------------------------------
+# Responsive table rendering
+# ---------------------------------------------------------------------------
+
+_ANSI_ESCAPE_RE = re.compile(r"\x1b\[[0-9;]*m")
+TABLE_GAP = 2
+
+
+def _terminal_width(default: int = 80) -> int:
+    """Return the usable terminal width, capped to a readable range."""
+    columns = os.environ.get("COLUMNS")
+    if columns:
+        try:
+            return max(20, min(160, int(columns)))
+        except ValueError:
+            pass
+    try:
+        size = shutil.get_terminal_size((default, 24))
+    except OSError:  # pragma: no cover - unusual terminals
+        return default
+    return max(20, min(160, size.columns))
+
+
+def _visible_len(text: str) -> int:
+    return len(_ANSI_ESCAPE_RE.sub("", text))
+
+
+def _truncate_cell(text: str, width: int) -> str:
+    """Truncate a cell to *width* visible characters (ellipsis-free below 2)."""
+    text = str(text)
+    if _visible_len(text) <= width:
+        return text
+    if width <= 1:
+        return text[:width]
+    return text[: width - 1] + "…"
+
+
+def _format_table(
+    headers: list[str],
+    rows: list[list[Any]],
+    *,
+    width: int | None = None,
+    min_widths: list[int] | None = None,
+    drop_order: list[int] | None = None,
+    compact_below: int = 44,
+) -> list[str]:
+    """Render a table that never exceeds *width* columns.
+
+    Low-priority columns (``drop_order``) are removed first, then the remaining
+    columns shrink down to ``min_widths``. Very narrow terminals switch to a
+    per-record two-line layout instead of unreadable one-character columns.
+    """
+    available = max(20, width if width is not None else _terminal_width())
+    columns_count = len(headers)
+    string_rows = [
+        [str(value) for value in row[:columns_count]]
+        + [""] * max(0, columns_count - len(row))
+        for row in rows
+    ]
+    default_mins = [max(2, len(header)) for header in headers]
+    mins = list(min_widths or default_mins)
+    mins = (mins + default_mins[len(mins):])[:columns_count]
+    mins = [max(1, value) for value in mins]
+    natural = [
+        max(len(headers[index]), *(len(row[index]) for row in string_rows))
+        if string_rows
+        else len(headers[index])
+        for index in range(columns_count)
+    ]
+    floors = [min(mins[index], natural[index]) for index in range(columns_count)]
+    if floors:
+        # The first column is an identifier (workspace/session/run). Never
+        # truncate it while it still fits on its own line.
+        floors[0] = min(natural[0], available)
+
+    def compact_lines() -> list[str]:
+        # Record-oriented layout keeps every field readable instead of
+        # collapsing columns to one character each.
+        lines: list[str] = []
+        for row in string_rows:
+            lines.append(_truncate_cell(row[0], available))
+            for index in range(1, columns_count):
+                prefix = f"  {_truncate_cell(headers[index], max(1, available // 3))}: "
+                lines.append(
+                    prefix
+                    + _truncate_cell(row[index], max(1, available - len(prefix)))
+                )
+        return lines
+
+    if available < compact_below and columns_count > 1 and string_rows:
+        return compact_lines()
+
+    kept = list(range(columns_count))
+    droppable = list(drop_order or [])
+
+    def minimum_total() -> int:
+        return sum(floors[index] for index in kept) + TABLE_GAP * (len(kept) - 1)
+
+    while len(kept) > 1 and minimum_total() > available and droppable:
+        candidate = droppable.pop(0)
+        if candidate in kept:
+            kept.remove(candidate)
+
+    if minimum_total() > available and string_rows:
+        return compact_lines()
+
+    widths = {index: min(natural[index], available) for index in kept}
+    while sum(widths.values()) + TABLE_GAP * (len(kept) - 1) > available:
+        shrinkable = [index for index in kept if widths[index] > floors[index]]
+        if not shrinkable:
+            break
+        widest = max(shrinkable, key=lambda index: widths[index] - floors[index])
+        widths[widest] -= 1
+
+    if sum(widths.values()) + TABLE_GAP * (len(kept) - 1) > available:
+        return compact_lines()
+
+    def render(row: list[str]) -> str:
+        return "  ".join(
+            _truncate_cell(row[index], widths[index]).ljust(widths[index])
+            for index in kept
+        ).rstrip()
+
+    header_line = render([str(header) for header in headers])
+    separator = "-" * min(available, _visible_len(header_line))
+    lines = [header_line, separator]
+    lines.extend(render(row) for row in string_rows)
+    return lines
+
+
+def _print_table(
+    headers: list[str],
+    rows: list[list[Any]],
+    *,
+    width: int | None = None,
+    min_widths: list[int] | None = None,
+    drop_order: list[int] | None = None,
+) -> None:
+    for line in _format_table(
+        headers,
+        rows,
+        width=width,
+        min_widths=min_widths,
+        drop_order=drop_order,
+    ):
+        print(line)
+
+
 def cmd_ws_create(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.workspace_create(args.name))
 
@@ -231,15 +384,20 @@ def cmd_ws_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     if args.json or not sys.stdout.isatty():
         print_json(workspaces)
         return
-    print(f"{'ID':<38} {'Имя':<30} {'Статус':<15} {'Режим':<10}")
-    print("-" * 85)
-    for w in workspaces:
-        print(
-            f"{w.get('id', ''):<38} "
-            f"{w.get('name', ''):<30} "
-            f"{_color_status(w.get('status', '')):<15} "
-            f"{w.get('approval_mode', ''):<10}"
-        )
+    _print_table(
+        ["ID", "Имя", "Статус", "Режим"],
+        [
+            [
+                w.get("id", ""),
+                w.get("name", ""),
+                w.get("status", ""),
+                w.get("approval_mode", ""),
+            ]
+            for w in workspaces
+        ],
+        min_widths=[36, 12, 9, 6],
+        drop_order=[3, 2],
+    )
     if not workspaces:
         print("Нет рабочих зон.")
 
@@ -777,10 +935,19 @@ def cmd_session_all(args: argparse.Namespace, client: DarkmageClient) -> None:
     if args.json or not sys.stdout.isatty():
         print_json(sessions)
         return
-    print(f"{'ID':<38} {'Название':<40} {'Создана':<20}")
-    print("-" * 100)
-    for s in sessions:
-        print(f"{s.get('id', ''):<38} {(s.get('title') or 'Сессия')[:40]:<40} {s.get('created_at', '')[:19]}")
+    _print_table(
+        ["ID", "Название", "Создана"],
+        [
+            [
+                s.get("id", ""),
+                s.get("title") or "Сессия",
+                s.get("created_at", "")[:10],
+            ]
+            for s in sessions
+        ],
+        min_widths=[36, 12, 10],
+        drop_order=[2],
+    )
     if not sessions:
         print("Сессий нет. Создайте: darkmage session new --title \"Моя сессия\"")
 
@@ -965,16 +1132,21 @@ def cmd_run_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     if args.json or not sys.stdout.isatty():
         print_json(runs)
         return
-    print(f"{'ID':<38} {'Статус':<15} {'Модель':<20} {'Промпт':<40} {'Создан':<16}")
-    print("-" * 115)
-    for r in runs:
-        print(
-            f"{r.get('id', ''):<38} "
-            f"{_color_status(r.get('status', '')):<15} "
-            f"{r.get('model', '-'):<20} "
-            f"{r.get('prompt', '')[:40]:<40} "
-            f"{r.get('created_at', '')[:16]}"
-        )
+    _print_table(
+        ["ID", "Статус", "Модель", "Промпт", "Создан"],
+        [
+            [
+                r.get("id", ""),
+                r.get("status", ""),
+                r.get("model") or "-",
+                r.get("prompt", ""),
+                r.get("created_at", "")[:10],
+            ]
+            for r in runs
+        ],
+        min_widths=[40, 16, 6, 8, 10],
+        drop_order=[2],
+    )
     if not runs:
         print("Нет ran.")
 
@@ -1593,33 +1765,65 @@ def _make_stdin_reader(fd: int) -> tuple[Callable[[], Awaitable[bytes]], Callabl
     return read, close
 
 
-def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
+def _term_guard_reason() -> str | None:
+    """Return why the local PTY relay cannot run, or ``None`` if it can."""
+    if os.name != "posix":
+        return (
+            "Команда term доступна только на Unix (Linux/macOS/WSL). "
+            "На Windows используйте TUI: darkmage tui <workspace_id>"
+        )
+    try:
+        import termios
+        import tty
+
+        if not hasattr(termios, "tcgetattr") or not hasattr(tty, "setraw"):
+            return (
+                "term требует полный Unix PTY API (termios/tty). "
+                "Используйте TUI: darkmage tui <workspace_id>"
+            )
+    except ImportError:
+        return (
+            "term требует модули termios/tty (Unix). "
+            "Используйте TUI: darkmage tui <workspace_id>"
+        )
+    try:
+        if not sys.stdin.isatty() or not sys.stdout.isatty():
+            return (
+                "term требует интерактивный TTY. Для скриптов используйте "
+                "darkmage run create/run events."
+            )
+        sys.stdin.fileno()
+    except (AttributeError, OSError, ValueError):
+        return (
+            "term требует интерактивный TTY с доступным stdin. "
+            "Для скриптов используйте darkmage run create/run events."
+        )
+    return None
+
+
+def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> int:
     """Интерактивный терминал workspace (PTY через runner-manager).
 
     Безопасный relay: ввод уходит в удалённый PTY, вывод пишется в stdout.
     Локальный shell не создаётся и удалённый вывод не исполняется.
     """
-    if os.name != "posix":
-        print(
-            "Команда term доступна только на Unix (Linux/macOS/WSL). "
-            "На Windows используйте TUI: darkmage tui <workspace_id>",
-            file=sys.stderr,
-        )
-        return
-
-    if not sys.stdin.isatty() or not sys.stdout.isatty():
-        print(
-            "term требует интерактивный TTY. Для скриптов используйте "
-            "darkmage run create/run events.",
-            file=sys.stderr,
-        )
-        return
+    reason = _term_guard_reason()
+    if reason is not None:
+        print(reason, file=sys.stderr)
+        return 1
 
     import asyncio
     import termios
     import tty
 
-    import websockets  # type: ignore[import-not-found]
+    try:
+        import websockets  # type: ignore[import-not-found]
+    except ImportError:
+        print(
+            "term требует пакет websockets. Установите: pip install websockets",
+            file=sys.stderr,
+        )
+        return 1
 
     result = client.pty_create(args.workspace_id)
     session_id = result["session_id"]
@@ -1665,6 +1869,7 @@ def cmd_term(args: argparse.Namespace, client: DarkmageClient) -> None:
             client.pty_stop(args.workspace_id, session_id)
         except Exception:  # noqa: S110, BLE001
             pass
+    return 0
 
 
 def cmd_tui(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -1681,80 +1886,103 @@ def cmd_tui(args: argparse.Namespace, client: DarkmageClient) -> None:
 
 
 
-def print_help_repl() -> None:
-    """Показать справку по интерактивному режиму."""
-    print("""
-Доступные команды:
-  auth register --email EMAIL --password PASSWORD  Зарегистрироваться
-  auth login [--email EMAIL] [--password PASSWORD]  Войти в систему
-  auth logout                                       Выйти из системы
-  auth interactive                                  Интерактивный вход
+def _subparser_action(
+    parser: argparse.ArgumentParser,
+) -> argparse._SubParsersAction | None:
+    for action in parser._actions:
+        if isinstance(action, argparse._SubParsersAction):
+            return action
+    return None
 
-  me                                                Информация о пользователе
-  usage                                             Использование ресурсов
-  memory get                                        Чтение памяти
-  memory put "content"                              Сохранить память
 
-  workspace create --name NAME                      Создать рабочую зону
-  workspace list [--limit N]                        Список рабочих зон
-  workspace get <workspace_id>                      Информация о зоне
-  workspace start <workspace_id>                    Запустить зону
-  workspace stop <workspace_id>                     Остановить зону
-  workspace delete <workspace_id>                   Удалить зону
-  workspace update <workspace_id> [--name NAME] [--approval-mode auto|ask]  Обновить зону
+def _iter_cli_commands(
+    parser: argparse.ArgumentParser, prefix: str = ""
+) -> list[tuple[str, str]]:
+    """Flatten the argparse tree into ``(command, help)`` rows for the REPL."""
+    action = _subparser_action(parser)
+    if action is None:
+        return []
+    helps = {
+        getattr(choice, "dest", ""): getattr(choice, "help", "") or ""
+        for choice in getattr(action, "_choices_actions", [])
+    }
+    rows: list[tuple[str, str]] = []
+    for name, child in action.choices.items():
+        command = f"{prefix} {name}".strip()
+        child_action = _subparser_action(child)
+        if child_action is None:
+            rows.append((command, helps.get(name, "")))
+        else:
+            rows.extend(_iter_cli_commands(child, command))
+    return rows
 
-  files list <workspace_id> [path]                  Список файлов
-  files read <workspace_id> <path> [--offset N] [--limit N]  Прочитать файл
-  files edit <workspace_id> <path> "content" [--base-content "..."]  Редактировать файл (требует одобрения)
-  files search <workspace_id> <query> [path]      Поиск по файлам
-  files download <workspace_id> <remote_path> <local_path>  Скачать файл
-  files upload <local_path> <workspace_id> <remote_path>  Загрузить файл (прямая запись)
-  files cp <workspace_id> <src> <dst>             Копировать файл (локально <-> ws:/path)
-  files mv <workspace_id> <src> <dst>             Переместить файл (локально <-> ws:/path)
-  files rm <workspace_id> <path>                  Удалить файл (локально или ws:/path)
-  files export <workspace_id> [-o out.zip]        Скачать весь воркспейс как ZIP
-  files status <workspace_id> [path]              Статус синхронизации (локально vs воркспейс)
-  files tree <workspace_id> [path] [--depth N]    Дерево файлов
 
-  files sync pull <workspace_id> [path]           Скачать файлы из воркспейса локально
-  files sync push <workspace_id> [path]           Загрузить локальные файлы в воркспейс
-  files sync diff <workspace_id> [path]           Показать различия (без передачи)
-  files sync watch <workspace_id> [path]          Наблюдать за локальной папкой и пушить изменения
-  files sync resolve <workspace_id> <path> local|workspace  Разрешить конфликт
+def print_help_repl(parser: argparse.ArgumentParser | None = None) -> None:
+    """Показать актуальную справку, собранную из parser'а."""
+    parser = parser or build_parser()
+    width = min(96, max(60, _terminal_width()))
+    print("Интерактивный режим. Команды вводятся без префикса 'darkmage'.")
+    print("Пример: run create <session_id> --prompt \"исправь тесты\"\n")
+    print("Доступные команды:")
+    rows = _iter_cli_commands(parser)
+    for line in _format_table(
+        ["Команда", "Описание"],
+        [[command, help_text] for command, help_text in rows],
+        width=width,
+        min_widths=[22, 20],
+        drop_order=[1],
+        compact_below=30,
+    ):
+        print(line)
+    print("\n  help <команда>   Подробная справка по команде")
+    print("  exit | quit | q  Выйти из интерактивного режима")
 
-  session create <workspace_id> [--title TITLE]   Создать сессию
-  session list <workspace_id> [--limit N]         Список сессий
 
-  run create <session_id> --prompt "text" [--model MODEL] [--plan-only] [--thorough] [--image file.png]  Создать задачу
-  run get <run_id>                                Информация о задаче
-  run message <run_id> "text"                     Сообщение в задачу
-  run answer <run_id> <question_id> "answer1" [answer2 ...]  Ответ на вопрос
-  run context <run_id>                            Контекст задачи
-  run revert <run_id>                             Откат задачи
-  run review <run_id>                             Ревью задачи
-  run stop <run_id>                               Остановить задачу
-  run events <run_id> [--last-event-id N] [--pretty]  События задачи
-  run list <workspace_id>                         Список задач зоны
+def _readline_module() -> Any:
+    """Return the stdlib readline module, or ``None`` where unavailable."""
+    try:
+        import readline  # type: ignore[import-not-found]
+    except ImportError:  # pragma: no cover - Windows without pyreadline
+        return None
+    return readline
 
-  process start <workspace_id> <cmd> [args...] [--cwd DIR] [--port PORT]  Запустить процесс
-  process output <workspace_id> [process_id]      Вывод процесса
-  process stop <workspace_id> <process_id>        Остановить процесс
 
-  payment create [--product standard_30d|credits] [--amount-rub N]  Создать платеж
-  payment list                                    Список платежей
+def _load_repl_history(readline_module: Any) -> int:
+    """Seed readline with the persisted (masked) command history."""
+    if readline_module is None:
+        return 0
+    from .security import HISTORY_FILE
 
-  admin status                                    Статус сервера
+    try:
+        data = json.loads(HISTORY_FILE.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError):
+        return 0
+    if not isinstance(data, list):
+        return 0
+    loaded = 0
+    for entry in data:
+        command = entry.get("command") if isinstance(entry, dict) else None
+        if not command:
+            continue
+        try:
+            readline_module.add_history(str(command))
+            loaded += 1
+        except Exception:  # noqa: BLE001, S110
+            break
+    try:
+        readline_module.set_history_length(100)
+    except Exception:  # noqa: BLE001, S110
+        pass
+    return loaded
 
-  chat "text" [--system SYSTEM] [--model M] [--temperature T] [--max-tokens N]  Чат
-  health                                          Проверка сервера
-  ready                                           Готовность сервера
 
-  exit / quit / q                                 Выйти из интерактивного режима
-""")
 def cmd_repl(args: argparse.Namespace, client: DarkmageClient) -> None:
     """Интерактивный режим REPL для работы с Darkmage AI."""
-    import readline
     import shlex
+
+    readline = _readline_module()
+    _load_repl_history(readline)
+    parser = build_parser()
 
     print("🚀 Darkmage CLI — Интерактивный режим (REPL)")
     print("Введите команду или 'help' для справки, 'exit' или 'quit' для выхода.\n")
@@ -1769,34 +1997,52 @@ def cmd_repl(args: argparse.Namespace, client: DarkmageClient) -> None:
         if not user_input.strip():
             continue
 
-        if user_input.lower() in ("exit", "quit", "q"):
+        lowered = user_input.lower()
+        if lowered in ("exit", "quit", "q"):
             print("👋 До свидания!")
             return
 
-        if user_input.lower() in ("help", "h"):
-            print_help_repl()
+        try:
+            parts = shlex.split(user_input)
+        except ValueError as exc:
+            print(f"Ошибка разбора команды: {exc}", file=sys.stderr)
+            continue
+        if not parts:
             continue
 
-        parts = shlex.split(user_input)
-        command = parts[0]
-        args_list = parts[1:] if len(parts) > 1 else []
+        if readline is not None:
+            try:
+                readline.add_history(_mask_secrets(user_input))
+            except Exception:  # noqa: BLE001, S110
+                pass
 
-        class Args:
-            pass
+        if parts[0].lower() in ("help", "h", "?"):
+            if len(parts) > 1:
+                try:
+                    parser.parse_args([*parts[1:], "--help"])
+                except SystemExit:
+                    pass
+            else:
+                print_help_repl(parser)
+            continue
 
-        args_obj = Args()
-        args_obj.func = None
-
-        sub_parser = build_parser()
         try:
-            sub_args = sub_parser.parse_args(parts)
-            func = sub_args.func
-            if func:
-                func(sub_args, client)
+            sub_args = parser.parse_args(parts)
+            func = getattr(sub_args, "func", None)
+            if func is None:
+                print_help_repl(parser)
+                continue
+            func(sub_args, client)
+            try:
+                _record_history(parts)
+            except OSError as exc:
+                print(f"history: {exc}", file=sys.stderr)
         except SystemExit:
             pass
         except DarkmageError as exc:
-            print_error(str(exc))
+            print(f"Error: {exc}", file=sys.stderr)
+        except KeyboardInterrupt:
+            print("\nПрервано.", file=sys.stderr)
 
 
 def cmd_config_show(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -1824,6 +2070,7 @@ def cmd_config_set(args: argparse.Namespace, client: DarkmageClient) -> None:
     changed = False
     if getattr(args, "url", None) is not None:
         set_base_url(args.url)
+        warn_insecure_url(args.url)
         changed = True
     if getattr(args, "token", None) is not None:
         set_token(args.token)
@@ -1925,50 +2172,210 @@ def cmd_history(args: argparse.Namespace, client: DarkmageClient) -> None:
             print(f"  {i + 1:>3}. {entry['command']}")
 
 
-def cmd_parallel(args: argparse.Namespace, client: DarkmageClient) -> None:
-    """Выполнить несколько команд параллельно."""
-    import asyncio
-    import shlex
+PARALLEL_OUTPUT_LIMIT = 64_000
 
-    async def run_one(cmd_str: str) -> tuple[int, str]:
-        """Run a single command string and return (exit_code, output)."""
-        try:
-            parts = shlex.split(cmd_str)
-            old_argv = sys.argv
-            sys.argv = ["darkmage"] + parts
+
+class _BoundedBuffer(io.TextIOBase):
+    """Per-thread output buffer with a hard character cap."""
+
+    def __init__(self, limit: int) -> None:
+        self.limit = max(0, limit)
+        self._parts: list[str] = []
+        self._size = 0
+        self.truncated = False
+
+    def write(self, text: str) -> int:  # type: ignore[override]
+        if not isinstance(text, str):
+            text = str(text)
+        remaining = self.limit - self._size
+        if remaining > 0:
+            kept = text[:remaining]
+            if kept:
+                self._parts.append(kept)
+                self._size += len(kept)
+        if len(text) > max(remaining, 0):
+            self.truncated = True
+        return len(text)
+
+    def flush(self) -> None:
+        return None
+
+    def isatty(self) -> bool:
+        return False
+
+    @property
+    def encoding(self) -> str:  # type: ignore[override]
+        return "utf-8"
+
+    def value(self) -> str:
+        return "".join(self._parts)
+
+
+class _ThreadStreamRouter:
+    """Route writes to a per-thread bounded buffer, else the real stream.
+
+    Commands print directly to ``sys.stdout``/``sys.stderr``. A thread-local
+    router lets ``parallel`` capture each command independently without the
+    process-global races of ``contextlib.redirect_stdout``.
+    """
+
+    def __init__(self, default: Any, limit: int) -> None:
+        self._default = default
+        self._limit = limit
+        self._local = threading.local()
+
+    def bind(self) -> _BoundedBuffer:
+        buffer = _BoundedBuffer(self._limit)
+        self._local.buffer = buffer
+        return buffer
+
+    def unbind(self) -> None:
+        self._local.buffer = None
+
+    def _buffer(self) -> _BoundedBuffer | None:
+        return getattr(self._local, "buffer", None)
+
+    def write(self, text: str) -> int:
+        buffer = self._buffer()
+        if buffer is not None:
+            return buffer.write(text)
+        return self._default.write(text)
+
+    def flush(self) -> None:
+        buffer = self._buffer()
+        if buffer is None:
+            self._default.flush()
+
+    def isatty(self) -> bool:
+        return False
+
+    def __getattr__(self, name: str) -> Any:
+        return getattr(self._default, name)
+
+
+def _parallel_defaults(args: argparse.Namespace) -> dict[str, Any]:
+    return {
+        "url": getattr(args, "url", None),
+        "runner_url": getattr(args, "runner_url", None),
+        "runner_token": getattr(args, "runner_token", None),
+        "json": getattr(args, "json", False),
+        "verbose": getattr(args, "verbose", False),
+    }
+
+
+def _run_one_parallel(
+    cmd_str: str,
+    parser: argparse.ArgumentParser,
+    defaults: dict[str, Any],
+    stdout_router: _ThreadStreamRouter,
+    stderr_router: _ThreadStreamRouter,
+) -> tuple[int, str, str, bool]:
+    """Run one command synchronously inside its own worker thread."""
+    out = stdout_router.bind()
+    err = stderr_router.bind()
+    code = 1
+    client_obj: DarkmageClient | None = None
+    try:
+        parts = shlex.split(cmd_str)
+        sub_args = parser.parse_args(parts)
+        for key, value in defaults.items():
+            current = getattr(sub_args, key, None)
+            if value and current in (None, False):
+                setattr(sub_args, key, value)
+        func = getattr(sub_args, "func", None)
+        if func is None:
+            err.write("no command function\n")
+        else:
+            client_obj = DarkmageClient(base_url=getattr(sub_args, "url", None))
+            if getattr(sub_args, "runner_url", None):
+                client_obj.runner_url = sub_args.runner_url.rstrip("/")
+            if getattr(sub_args, "runner_token", None):
+                client_obj.runner_token = sub_args.runner_token
+            result = func(sub_args, client_obj)
+            code = result if isinstance(result, int) else 0
+    except SystemExit as exc:
+        if exc.code is None:
+            code = 0
+        elif isinstance(exc.code, int):
+            code = exc.code
+        else:
+            code = 1
+            err.write(f"{exc.code}\n")
+    except BaseException as exc:  # noqa: BLE001 - reported per command
+        code = 1
+        err.write(f"{type(exc).__name__}: {exc}\n")
+    finally:
+        if client_obj is not None:
             try:
-                sub_parser = build_parser()
-                sub_args = sub_parser.parse_args(parts)
-                func = sub_args.func
-                sub_client = DarkmageClient(base_url=sub_args.url)
-                try:
-                    func(sub_args, sub_client)
-                finally:
-                    sub_client.close()
-                return 0, ""
-            except SystemExit as exc:
-                return int(exc.code) if exc.code is not None else 0, ""
-            except Exception as exc:  # noqa: BLE001
-                return 1, str(exc)
-            finally:
-                sys.argv = old_argv
-        except SystemExit as exc:
-            return int(exc.code) if exc.code is not None else 0, ""
-        except Exception as exc:  # noqa: BLE001
-            return 1, str(exc)
+                client_obj.close()
+            except Exception:  # noqa: BLE001, S110
+                pass
+        stdout_router.unbind()
+        stderr_router.unbind()
+    return code, out.value(), err.value(), out.truncated or err.truncated
 
-    async def run_all() -> None:
-        tasks = [run_one(cmd) for cmd in args.commands]
-        results = await asyncio.gather(*tasks, return_exceptions=True)
-        for i, result in enumerate(results):
-            if isinstance(result, BaseException):
-                print(f"[{i + 1}] Ошибка: {result}")
-            else:
-                code: int = result[0]
-                status = "OK" if code == 0 else f"Ошибка ({code})"
-                print(f"[{i + 1}] {status}: {args.commands[i]}")
 
-    asyncio.run(run_all())
+async def _run_parallel_commands(
+    commands: list[str],
+    *,
+    parser_arg: argparse.ArgumentParser | None = None,
+    defaults: dict[str, Any] | None = None,
+    limit: int = PARALLEL_OUTPUT_LIMIT,
+) -> list[tuple[int, str, str, bool]]:
+    """Execute command strings concurrently with bounded per-command output."""
+    import asyncio
+
+    parser_obj = parser_arg or build_parser()
+    stdout_router = _ThreadStreamRouter(sys.stdout, limit)
+    stderr_router = _ThreadStreamRouter(sys.stderr, limit)
+    old_stdout, old_stderr = sys.stdout, sys.stderr
+    sys.stdout, sys.stderr = stdout_router, stderr_router
+    try:
+        tasks = [
+            asyncio.to_thread(
+                _run_one_parallel,
+                command,
+                parser_obj,
+                defaults or {},
+                stdout_router,
+                stderr_router,
+            )
+            for command in commands
+        ]
+        return list(await asyncio.gather(*tasks))
+    finally:
+        sys.stdout, sys.stderr = old_stdout, old_stderr
+
+
+def _print_parallel_results(
+    commands: list[str], results: list[tuple[int, str, str, bool]]
+) -> None:
+    for index, (code, output, errors, truncated) in enumerate(results, 1):
+        status = "OK" if code == 0 else f"Ошибка ({code})"
+        print(f"[{index}] {status}: {commands[index - 1]}")
+        for label, text in (("", output), ("stderr: ", errors)):
+            if not text:
+                continue
+            indented = "\n".join(
+                f"    {label}{line}" if line else f"    {label}".rstrip()
+                for line in text.rstrip("\n").splitlines()
+            )
+            print(indented)
+        if truncated:
+            print("    … вывод обрезан (лимит 64 КиБ на команду)")
+
+
+def cmd_parallel(args: argparse.Namespace, client: DarkmageClient) -> None:
+    """Выполнить несколько команд параллельно (bounded output)."""
+    import asyncio
+
+    results = asyncio.run(
+        _run_parallel_commands(
+            list(args.commands),
+            defaults=_parallel_defaults(args),
+        )
+    )
+    _print_parallel_results(list(args.commands), results)
 
 
 def cmd_git_clone(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -2006,16 +2413,120 @@ def cmd_mcp_call(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.mpc_call(args.tool, arguments, args.workspace_id))
 
 
-def cmd_chat(args: argparse.Namespace, client: DarkmageClient) -> None:
-    messages = [{"role": "user", "content": args.message}]
-    if args.system:
-        messages.insert(0, {"role": "system", "content": args.system})
-    data = client.chat_completion(messages, args.model, args.temperature, args.max_tokens)
+def _chat_events_from_response(data: dict[str, Any]) -> list[dict[str, Any]]:
+    """Fallback adapter for clients/servers without streaming support."""
+    events: list[dict[str, Any]] = []
     for choice in data.get("choices", []):
-        msg = choice.get("message", {})
-        print(msg.get("content", ""))
-    if data.get("usage"):
-        print_json(data["usage"])
+        message = choice.get("message", {}) if isinstance(choice, dict) else {}
+        content = message.get("content") if isinstance(message, dict) else None
+        if content:
+            events.append({"type": "delta", "text": str(content)})
+    usage = data.get("usage")
+    if isinstance(usage, dict):
+        events.append({"type": "usage", "usage": usage})
+    events.append({"type": "done"})
+    return events
+
+
+def cmd_chat(args: argparse.Namespace, client: DarkmageClient) -> int:
+    """Chat completion with optional streaming, JSON output and stdin input."""
+    message = getattr(args, "message", None)
+    if message is None or message == "-":
+        if message is None and sys.stdin.isatty():
+            print(
+                "Error: укажите сообщение или передайте его через stdin.",
+                file=sys.stderr,
+            )
+            return 2
+        message = sys.stdin.read().strip()
+    if not message:
+        print("Error: пустое сообщение.", file=sys.stderr)
+        return 2
+
+    messages = [{"role": "user", "content": message}]
+    if getattr(args, "system", None):
+        messages.insert(0, {"role": "system", "content": args.system})
+
+    json_mode = bool(getattr(args, "json", False))
+    streaming = not bool(getattr(args, "no_stream", False))
+    model = getattr(args, "model", None)
+    content_parts: list[str] = []
+    usage: dict[str, Any] | None = None
+
+    try:
+        if streaming and hasattr(client, "chat_completion_stream"):
+            events = client.chat_completion_stream(
+                messages,
+                model,
+                getattr(args, "temperature", 0.7),
+                getattr(args, "max_tokens", None),
+            )
+        else:
+            events = _chat_events_from_response(
+                client.chat_completion(
+                    messages,
+                    model,
+                    getattr(args, "temperature", 0.7),
+                    getattr(args, "max_tokens", None),
+                )
+            )
+        for event in events:
+            event_type = event.get("type")
+            if event_type == "delta":
+                text = str(event.get("text") or "")
+                content_parts.append(text)
+                if not json_mode and text:
+                    sys.stdout.write(text)
+                    sys.stdout.flush()
+            elif event_type == "usage" and isinstance(event.get("usage"), dict):
+                usage = event["usage"]
+    except DarkmageError as exc:
+        if json_mode:
+            print_json(
+                {
+                    "schema_version": 1,
+                    "status": "error",
+                    "error": {
+                        "message": str(exc),
+                        "status_code": exc.status_code,
+                        "retryable": exc.retryable,
+                    },
+                }
+            )
+        else:
+            print(f"Error: {exc}", file=sys.stderr)
+        return 1
+
+    content = "".join(content_parts)
+    if json_mode:
+        print_json(
+            {
+                "schema_version": 1,
+                "model": model,
+                "content": content,
+                "usage": usage,
+            }
+        )
+        return 0
+
+    if content and not content.endswith("\n"):
+        print()
+    if usage:
+        parts = [
+            f"prompt={usage.get('prompt_tokens')}"
+            if usage.get("prompt_tokens") is not None
+            else None,
+            f"completion={usage.get('completion_tokens')}"
+            if usage.get("completion_tokens") is not None
+            else None,
+            f"total={usage.get('total_tokens')}"
+            if usage.get("total_tokens") is not None
+            else None,
+        ]
+        summary = " ".join(part for part in parts if part)
+        if summary:
+            print(f"usage: {summary}", file=sys.stderr)
+    return 0
 
 
 def cmd_health(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -2152,22 +2663,28 @@ _darkmage_complete() {
 
     case "$prev" in
         darkmage)
-            COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run process payment admin term tui config git mcp chat health ready doctor completion' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'auth me usage memory workspace files session run repl approvals exec process payment admin term tui config git mcp chat health ready doctor completion history parallel login start' -- "$cur") )
             ;;
         auth)
-            COMPREPLY=( $(compgen -W 'register login logout' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'register login logout interactive' -- "$cur") )
             ;;
         workspace)
-            COMPREPLY=( $(compgen -W 'create list get update start stop delete' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create list get update start stop delete apk godot blender godot-tests tiled-import ldtk-import' -- "$cur") )
             ;;
         files)
             COMPREPLY=( $(compgen -W 'list read edit search download upload cp mv rm export status tree sync' -- "$cur") )
             ;;
+        sync)
+            COMPREPLY=( $(compgen -W 'pull push diff watch resolve' -- "$cur") )
+            ;;
         session)
-            COMPREPLY=( $(compgen -W 'create list' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create list new all runs files read' -- "$cur") )
             ;;
         run)
             COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events' -- "$cur") )
+            ;;
+        approvals)
+            COMPREPLY=( $(compgen -W 'approve reject' -- "$cur") )
             ;;
         process)
             COMPREPLY=( $(compgen -W 'start output stop' -- "$cur") )
@@ -2183,6 +2700,9 @@ _darkmage_complete() {
             ;;
         config)
             COMPREPLY=( $(compgen -W 'show set export import' -- "$cur") )
+            ;;
+        history)
+            COMPREPLY=()
             ;;
         *)
             COMPREPLY=()
@@ -2210,6 +2730,9 @@ _darkmage_complete() {
         'files:Workspace files'
         'session:Session management'
         'run:Task runs management'
+        'repl:Interactive command shell'
+        'approvals:Approve or reject tool calls'
+        'exec:One-shot run with final answer'
         'process:Background processes'
         'payment:Payments and billing'
         'admin:Admin commands'
@@ -2223,6 +2746,10 @@ _darkmage_complete() {
         'ready:Readiness check'
         'doctor:Environment diagnostics'
         'completion:Shell completion scripts'
+        'history:Command history'
+        'parallel:Run commands concurrently'
+        'login:Interactive login'
+        'start:Start TUI session'
     )
     _describe 'command' commands
 }
@@ -2243,6 +2770,9 @@ complete -c darkmage -f -a 'workspace' -d 'Workspace management'
 complete -c darkmage -f -a 'files' -d 'Workspace files'
 complete -c darkmage -f -a 'session' -d 'Session management'
 complete -c darkmage -f -a 'run' -d 'Task runs management'
+complete -c darkmage -f -a 'repl' -d 'Interactive command shell'
+complete -c darkmage -f -a 'approvals' -d 'Approve or reject tool calls'
+complete -c darkmage -f -a 'exec' -d 'One-shot run with final answer'
 complete -c darkmage -f -a 'process' -d 'Background processes'
 complete -c darkmage -f -a 'payment' -d 'Payments and billing'
 complete -c darkmage -f -a 'admin' -d 'Admin commands'
@@ -2256,13 +2786,19 @@ complete -c darkmage -f -a 'health' -d 'Liveness check'
 complete -c darkmage -f -a 'ready' -d 'Readiness check'
 complete -c darkmage -f -a 'doctor' -d 'Environment diagnostics'
 complete -c darkmage -f -a 'completion' -d 'Shell completion scripts'
+complete -c darkmage -f -a 'history' -d 'Command history'
+complete -c darkmage -f -a 'parallel' -d 'Run commands concurrently'
+complete -c darkmage -f -a 'login' -d 'Interactive login'
+complete -c darkmage -f -a 'start' -d 'Start TUI session'
 
 # Subcommand completions
-complete -c darkmage -f -a 'register login logout' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
-complete -c darkmage -f -a 'create list get update start stop delete' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
+complete -c darkmage -f -a 'register login logout interactive' -d 'auth subcommands' -n '__fish_seen_subcommand auth'
+complete -c darkmage -f -a 'create list get update start stop delete apk godot blender godot-tests tiled-import ldtk-import' -d 'workspace subcommands' -n '__fish_seen_subcommand workspace'
 complete -c darkmage -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
-complete -c darkmage -f -a 'create list' -d 'session subcommands' -n '__fish_seen_subcommand session'
+complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' -n '__fish_seen_subcommand sync'
+complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c darkmage -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c darkmage -f -a 'approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
 complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
@@ -2852,12 +3388,32 @@ def build_parser() -> argparse.ArgumentParser:
     p.set_defaults(func=cmd_mcp_call)
 
     # chat
-    p = sub.add_parser("chat", help="Chat completion")
-    p.add_argument("message")
+    p = sub.add_parser(
+        "chat", help="Chat completion (streams by default, --json for scripts)"
+    )
+    p.add_argument(
+        "message",
+        nargs="?",
+        default=None,
+        help="Message text, '-' or omitted to read stdin",
+    )
     p.add_argument("--system")
     p.add_argument("--model")
     p.add_argument("--temperature", type=float, default=0.7)
     p.add_argument("--max-tokens", type=int, default=None, dest="max_tokens")
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Machine-readable envelope on stdout",
+    )
+    p.add_argument(
+        "--no-stream",
+        action="store_true",
+        default=False,
+        dest="no_stream",
+        help="Wait for the complete response instead of streaming",
+    )
     p.set_defaults(func=cmd_chat)
 
     # health
@@ -3002,6 +3558,8 @@ def main(argv: list[str] | None = None) -> int:
         client.runner_url = args.runner_url.rstrip("/")
     if args.runner_token:
         client.runner_token = args.runner_token
+    # Advisory only and on stderr, so JSON/one-shot stdout stays clean.
+    warn_insecure_url(client.base_url)
 
     # Если не указана команда — интерактивный вход как в Claude Code:
     #   нет токена  → вход / регистрация

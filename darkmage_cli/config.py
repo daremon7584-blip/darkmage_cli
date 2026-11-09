@@ -64,7 +64,13 @@ def set_runner_token(token: str | None) -> None:
 
 
 def is_configured() -> bool:
-    return load_config().get("token") is not None and bool(get_base_url())
+    """True when a token is available and an API base URL can be resolved.
+
+    This is the single canonical implementation; ``security.is_configured``
+    delegates here. Tokens supplied via ``DARKMAGE_TOKEN`` count as configured,
+    and the default localhost base URL makes a token sufficient for local use.
+    """
+    return bool(get_token()) and bool(get_base_url())
 
 
 def clear_config() -> None:
