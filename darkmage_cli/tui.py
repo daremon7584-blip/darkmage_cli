@@ -26,6 +26,7 @@
 
 from __future__ import annotations
 
+import re
 from pathlib import Path
 from typing import Any
 
@@ -57,6 +58,26 @@ from .events import (
     question_items,
 )
 from . import sync as sync_mod
+
+# Keep memory bounded for a long-running attached stream.
+MAX_EVENTS_LOG = 1000
+
+# C0/C1 control characters except tab and newline. ESC (0x1b) is the important
+# one: agent output must never be able to move the cursor or inject ANSI codes.
+_CONTROL_CHARS_RE = re.compile(r"[\x00-\x08\x0b-\x0d\x0e-\x1f\x7f-\x9f]")
+
+
+def strip_control(value: Any) -> str:
+    """Remove terminal control characters from untrusted text."""
+    return _CONTROL_CHARS_RE.sub("", str(value))
+
+
+def safe_markup(value: Any, limit: int | None = None) -> str:
+    """Sanitize untrusted text and escape it for Rich markup."""
+    text = strip_control(value)
+    if limit is not None:
+        text = text[:limit]
+    return escape(text)
 
 
 class DarkmageTUI(App[None]):
@@ -277,13 +298,19 @@ class DarkmageTUI(App[None]):
             path = f"{base_path}/{name}" if base_path != "." else name
 
             if kind == "directory":
-                node = parent.add(f"📁 {name}", data={"path": path, "kind": "directory"})
+                node = parent.add(
+                    f"📁 {safe_markup(name)}",
+                    data={"path": path, "kind": "directory"},
+                )
                 node.expand()
                 # Загружаем содержимое директории лениво при раскрытии
                 self._tree_nodes[path] = node
             else:
                 size_str = f" ({size} B)" if size else ""
-                parent.add_leaf(f"📄 {name}{size_str}", data={"path": path, "kind": "file"})
+                parent.add_leaf(
+                    f"📄 {safe_markup(name)}{size_str}",
+                    data={"path": path, "kind": "file"},
+                )
 
     # ------------------------------------------------------------------
     # Event streaming (SSE)
@@ -353,27 +380,29 @@ class DarkmageTUI(App[None]):
 
         if isinstance(data, dict):
             if etype == "assistant.delta":
-                log.write(escape(str(data.get("text", ""))))
+                log.write(safe_markup(data.get("text", "")))
             elif etype == "tool.requested":
                 log.write(
-                    f"🔧 [bold cyan]{escape(str(data.get('name', '')))}[/] "
-                    f"{escape(str(data.get('arguments', {})))}"
+                    f"🔧 [bold cyan]{safe_markup(data.get('name', ''))}[/] "
+                    f"{safe_markup(data.get('arguments', {}))}"
                 )
             elif etype == "tool.output":
                 log.write(
                     f"📤 [bold green]вывод:[/] "
-                    f"{escape(str(data.get('output', ''))[:300])}"
+                    f"{safe_markup(data.get('output', ''), 300)}"
                 )
             elif etype == "approval.required":
                 if data.get("auto"):
                     self.pending_approval = None
-                    log.write(Text(approval_card(data), style="green"))
+                    log.write(Text(strip_control(approval_card(data)), style="green"))
                 else:
                     self.pending_approval = data
-                    log.write(Text(approval_card(data), style="bold yellow"))
+                    log.write(
+                        Text(strip_control(approval_card(data)), style="bold yellow")
+                    )
                     log.write(
                         "  /approve  /approve turn  /reject  /diff  "
-                        f"· {escape(approval_summary(data))}"
+                        f"· {safe_markup(approval_summary(data))}"
                     )
             elif etype == "approval.resolved":
                 approval_id = data.get("approval_id")
@@ -385,41 +414,45 @@ class DarkmageTUI(App[None]):
                     self.pending_approval = None
                 log.write(
                     f"✅ [bold green]Одобрение:[/] "
-                    f"{escape(str(data.get('decision', '')))} "
-                    f"scope={escape(str(data.get('scope', 'call')))}"
+                    f"{safe_markup(data.get('decision', ''))} "
+                    f"scope={safe_markup(data.get('scope', 'call'))}"
                 )
             elif etype == "checkpoint.ready":
                 log.write("💾 [bold magenta]Чекпоинт сохранён[/]")
             elif etype == "diff.ready":
-                log.write(Text(format_diff(data), style="magenta"))
+                log.write(Text(strip_control(format_diff(data)), style="magenta"))
             elif etype == "run.completed":
                 self.pending_approval = None
                 self.pending_question = None
                 log.write(
                     f"🏁 [bold green]Завершено:[/] "
-                    f"{escape(str(data.get('finish_reason', '')))}"
+                    f"{safe_markup(data.get('finish_reason', ''))}"
                 )
             elif etype == "run.failed":
                 self.pending_approval = None
                 self.pending_question = None
                 log.write(
                     f"💥 [bold red]Ошибка:[/] "
-                    f"{escape(str(data.get('error', '')))}"
+                    f"{safe_markup(data.get('error', ''))}"
                 )
             elif etype == "run.cancelled":
                 self.pending_approval = None
                 self.pending_question = None
                 log.write("🛑 [bold red]Отменено[/]")
             elif etype == "user.message":
-                log.write(f"[bold white][Вы][/] {escape(str(data.get('text', '')))}")
+                log.write(
+                    f"[bold white][Вы][/] {safe_markup(data.get('text', ''))}"
+                )
             elif etype == "context.compacted":
                 log.write(
                     f"🗜 [bold blue]Компактировка:[/] "
-                    f"{escape(str(data.get('dropped_messages', '')))} сообщений удалено"
+                    f"{safe_markup(data.get('dropped_messages', ''))} сообщений удалено"
                 )
             elif etype == "agent.question":
                 self.pending_question = data
-                log.write(Text(question_card(data), style="bold yellow"))
+                log.write(
+                    Text(strip_control(question_card(data)), style="bold yellow")
+                )
                 log.write(
                     "  Ответьте в компоузере или /answer <текст> (несколько — через |)"
                 )
@@ -433,25 +466,31 @@ class DarkmageTUI(App[None]):
                     self.pending_question = None
                 log.write(
                     f"💬 [bold yellow]Ответ:[/] "
-                    f"{escape(str(data.get('answers', [])))}"
+                    f"{safe_markup(data.get('answers', []))}"
                 )
             else:
-                log.write(f"[{escape(etype)}] {escape(str(data)[:300])}")
+                log.write(
+                    f"[{safe_markup(etype)}] {safe_markup(data, 300)}"
+                )
         else:
-            log.write(f"[{escape(etype)}] {escape(str(data))}")
+            log.write(f"[{safe_markup(etype)}] {safe_markup(data)}")
 
+        self._remember_event(ev)
+
+    def _remember_event(self, ev: dict[str, Any]) -> None:
+        """Append an event while keeping the in-memory log bounded."""
         self._events_log.append(ev)
-        # Bound memory for a long-lived attached run.
-        if len(self._events_log) > 5000:
-            del self._events_log[:1000]
+        overflow = len(self._events_log) - MAX_EVENTS_LOG
+        if overflow > 0:
+            del self._events_log[:overflow]
 
     def _write_event(self, etype: str, detail: str) -> None:
         log = self.query_one("#event-log", RichLog)
-        log.write(f"[{etype}] {escape(detail)}")
+        log.write(f"[{safe_markup(etype)}] {safe_markup(detail)}")
 
     def _show_error(self, msg: str) -> None:
         log = self.query_one("#event-log", RichLog)
-        log.write(f"[bold red][ОШИБКА][/] {escape(msg)}")
+        log.write(f"[bold red][ОШИБКА][/] {safe_markup(msg)}")
 
     # ------------------------------------------------------------------
     # Status bar
@@ -460,7 +499,7 @@ class DarkmageTUI(App[None]):
     def _update_status(self, msg: str) -> None:
         try:
             bar = self.query_one("#status-bar", Static)
-            bar.update(f"📍 {msg}")
+            bar.update(f"📍 {safe_markup(msg)}")
         except Exception:  # noqa: BLE001
             pass
 
@@ -487,7 +526,7 @@ class DarkmageTUI(App[None]):
             await self._handle_command(text)
         else:
             self.query_one("#event-log", RichLog).write(
-                f"[bold white][Вы][/] {escape(text)}"
+                f"[bold white][Вы][/] {safe_markup(text)}"
             )
             await self._send_message(text)
 
@@ -552,7 +591,7 @@ class DarkmageTUI(App[None]):
             self.run_worker(self._cmd_files(args), name="cmd-files")
             return
 
-        log.write(f"[bold red]Неизвестная команда:[/] /{escape(cmd)}")
+        log.write(f"[bold red]Неизвестная команда:[/] /{safe_markup(cmd)}")
 
     async def _send_message(self, text: str) -> None:
         if self.client is None or not self.run_id:
@@ -577,9 +616,9 @@ class DarkmageTUI(App[None]):
         try:
             ws = self.client.workspace_get(self.workspace_id)
             log.write(
-                f"[bold]Воркспейс:[/] {escape(str(ws.get('name', '—')))}  "
-                f"[bold]Статус:[/] {escape(str(ws.get('status', '—')))}  "
-                f"[bold]Режим:[/] {escape(str(ws.get('approval_mode', '—')))}"
+                f"[bold]Воркспейс:[/] {safe_markup(ws.get('name', '—'))}  "
+                f"[bold]Статус:[/] {safe_markup(ws.get('status', '—'))}  "
+                f"[bold]Режим:[/] {safe_markup(ws.get('approval_mode', '—'))}"
             )
         except DarkmageError as exc:
             self._show_error(f"Ошибка статуса: {exc}")
@@ -596,7 +635,7 @@ class DarkmageTUI(App[None]):
                 data = self.client.run_stop(self.run_id)
                 log.write(
                     f"[bold green]🛑 Run остановлен:[/] "
-                    f"{escape(str(data.get('id', self.run_id)))}"
+                    f"{safe_markup(data.get('id', self.run_id))}"
                 )
             except DarkmageError as exc:
                 self._show_error(f"Не удалось остановить ran: {exc}")
@@ -630,7 +669,7 @@ class DarkmageTUI(App[None]):
             run = self.client.run_create(session_id, prompt)
             run_id = run.get("id")
             self.run_id = run_id
-            log.write(f"[bold green]✅ Ran создан:[/] {escape(str(run_id))}")
+            log.write(f"[bold green]✅ Ran создан:[/] {safe_markup(run_id)}")
             # Запускаем стрим событий для нового ran
             self._start_stream()
         except DarkmageError as exc:
@@ -666,8 +705,8 @@ class DarkmageTUI(App[None]):
             return
         self.pending_approval = None
         log.write(
-            f"[bold green]✅ Одобрено:[/] {escape(str(result.get('name', 'tool call')))} "
-            f"({escape(approval_id)}) scope={escape(scope)}"
+            f"[bold green]✅ Одобрено:[/] {safe_markup(result.get('name', 'tool call'))} "
+            f"({safe_markup(approval_id)}) scope={safe_markup(scope)}"
         )
 
     async def _cmd_reject(self, args: list[str]) -> None:
@@ -696,7 +735,7 @@ class DarkmageTUI(App[None]):
         self.pending_approval = None
         log.write(
             f"[bold yellow]⛔ Отклонено:[/] "
-            f"{escape(str(result.get('name', 'tool call')))} ({escape(approval_id)})"
+            f"{safe_markup(result.get('name', 'tool call'))} ({safe_markup(approval_id)})"
         )
 
     async def _cmd_answer(self, args: list[str]) -> None:
@@ -737,7 +776,7 @@ class DarkmageTUI(App[None]):
             self._show_error(f"Не удалось ответить: {exc}")
             return
         self.pending_question = None
-        log.write(f"[bold green]💬 Ответ отправлен:[/] {escape(str(answers))}")
+        log.write(f"[bold green]💬 Ответ отправлен:[/] {safe_markup(answers)}")
 
     def _show_pending_diff(self) -> None:
         log = self.query_one("#event-log", RichLog)
@@ -797,7 +836,7 @@ class DarkmageTUI(App[None]):
                 size = entry.get("size_bytes", 0)
                 icon = "📁" if kind == "directory" else "📄"
                 size_str = f" ({size} B)" if size and kind == "file" else ""
-                log.write(f"  {icon} {entry.get('name', '')}{size_str}")
+                log.write(f"  {icon} {safe_markup(entry.get('name', ''))}{size_str}")
             if len(entries) > 30:
                 log.write(f"  … и ещё {len(entries) - 30}")
         except DarkmageError as exc:
@@ -820,8 +859,15 @@ class DarkmageTUI(App[None]):
             content = self.client.workspace_file_content(self.workspace_id, path)
             text = content.get("content", "")
             log = self.query_one("#event-log", RichLog)
-            log.write(f"[bold]📄 Файл:[/] {path} ({content.get('size_bytes', 0)} байт)")
-            log.write(f"```\n{text[:2000]}{'…' if len(text) > 2000 else ''}\n```")
+            log.write(
+                f"[bold]📄 Файл:[/] {safe_markup(path)} "
+                f"({content.get('size_bytes', 0)} байт)"
+            )
+            # File content is rendered as plain Text, never parsed as markup.
+            preview = strip_control(text[:2000])
+            if len(text) > 2000:
+                preview += "…"
+            log.write(Text(preview))
         except DarkmageError as exc:
             self._show_error(f"Не удалось прочитать файл: {exc}")
 
