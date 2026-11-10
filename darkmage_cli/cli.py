@@ -9,6 +9,7 @@ import re
 import shlex
 import shutil
 import sys
+import textwrap
 import threading
 from datetime import datetime
 from pathlib import Path
@@ -393,6 +394,7 @@ def _print_table(
     width: int | None = None,
     min_widths: list[int] | None = None,
     drop_order: list[int] | None = None,
+    compact_below: int = 44,
 ) -> None:
     for line in _format_table(
         headers,
@@ -400,8 +402,36 @@ def _print_table(
         width=width,
         min_widths=min_widths,
         drop_order=drop_order,
+        compact_below=compact_below,
     ):
         print(line)
+
+
+def _short_requested_at(value: Any) -> str:
+    """``2026-02-02T10:00:00+00:00`` -> ``2026-02-02 10:00`` for the list table."""
+    text = str(value or "")
+    if "T" in text:
+        date, rest = text.split("T", 1)
+        return f"{date} {rest[:5]}"
+    return text[:16]
+
+
+def _print_wrapped_field(label: str, value: Any, *, width: int | None = None) -> None:
+    """Print one ``Label: value`` field, wrapping long values within the terminal."""
+    available = max(20, width if width is not None else _terminal_width())
+    prefix = f"{label + ':':<11} "
+    body_width = max(1, available - len(prefix))
+    body = str(value or "-")
+    chunks = textwrap.wrap(
+        body,
+        width=body_width,
+        break_long_words=True,
+        break_on_hyphens=False,
+        replace_whitespace=True,
+    ) or [""]
+    print(prefix + chunks[0])
+    for chunk in chunks[1:]:
+        print(" " * len(prefix) + chunk)
 
 
 def cmd_ws_create(args: argparse.Namespace, client: DarkmageClient) -> None:
@@ -1208,6 +1238,61 @@ def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> int:
             file=sys.stderr,
         )
         return 130
+    return 0
+
+
+def cmd_approval_list(args: argparse.Namespace, client: DarkmageClient) -> int:
+    approvals = client.approval_list(getattr(args, "limit", 50))
+    if args.json or not sys.stdout.isatty():
+        print_json(approvals)
+        return 0
+    if not approvals:
+        print("No pending approvals.")
+        return 0
+    print("Pending approvals:")
+    _print_table(
+        ["ID", "TOOL", "RUN", "REQUESTED", "SUMMARY"],
+        [
+            [
+                approval.get("approval_id") or approval.get("id", ""),
+                approval.get("name", ""),
+                approval.get("run_id", ""),
+                _short_requested_at(approval.get("requested_at")),
+                approval.get("summary", ""),
+            ]
+            for approval in approvals
+        ],
+        min_widths=[36, 8, 8, 16, 12],
+        drop_order=[4, 3],
+        compact_below=120,
+    )
+    return 0
+
+
+def cmd_approval_show(args: argparse.Namespace, client: DarkmageClient) -> int:
+    data = client.approval_get(args.approval_id)
+    if args.json or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+    approval_id = data.get("approval_id") or data.get("id") or args.approval_id
+    print(f"Approval: {approval_id}")
+    _print_wrapped_field("Tool", data.get("name"))
+    _print_wrapped_field("Status", data.get("status"))
+    _print_wrapped_field("Run status", data.get("run_status"))
+    _print_wrapped_field("Run", data.get("run_id"))
+    _print_wrapped_field("Session", data.get("session_id"))
+    _print_wrapped_field("Requested", data.get("requested_at"))
+    if data.get("resolved_at"):
+        _print_wrapped_field("Resolved", data.get("resolved_at"))
+    _print_wrapped_field("Target", data.get("target"))
+    _print_wrapped_field("Summary", data.get("summary"))
+    print()
+    print("Approve:")
+    print(f"  darkmage approvals approve {approval_id}")
+    print("Reject:")
+    print(f"  darkmage approvals reject {approval_id}")
+    print("Approve rest of turn:")
+    print(f"  darkmage approvals approve {approval_id} --scope turn")
     return 0
 
 
@@ -2722,7 +2807,7 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty' -- "$cur") )
             ;;
         approvals)
-            COMPREPLY=( $(compgen -W 'approve reject --json --scope' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit' -- "$cur") )
             ;;
         process)
             COMPREPLY=( $(compgen -W 'start output stop --json' -- "$cur") )
@@ -2778,7 +2863,7 @@ _darkmage() {
         'session:Session management'
         'run:Task runs management'
         'repl:Interactive command shell'
-        'approvals:Approve or reject tool calls'
+        'approvals:List, show, approve or reject tool calls'
         'exec:One-shot run with final answer'
         'process:Background processes'
         'payment:Payments and billing'
@@ -2825,7 +2910,9 @@ _darkmage() {
                         '--plan-only[Plan only]'
                     ;;
                 approvals)
-                    _arguments '--scope[Approval scope]:scope:(call turn)'
+                    _arguments '1:subcommand:(list show approve reject)' \
+                        '--scope[Approval scope]:scope:(call turn)' \
+                        '--limit[Maximum approvals]:limit:'
                     ;;
                 complete|completion)
                     _values 'shell' bash zsh fish
@@ -2852,7 +2939,7 @@ complete -c darkmage -f -a 'files' -d 'Workspace files'
 complete -c darkmage -f -a 'session' -d 'Session management'
 complete -c darkmage -f -a 'run' -d 'Task runs management'
 complete -c darkmage -f -a 'repl' -d 'Interactive command shell'
-complete -c darkmage -f -a 'approvals' -d 'Approve or reject tool calls'
+complete -c darkmage -f -a 'approvals' -d 'List, show, approve or reject tool calls'
 complete -c darkmage -f -a 'exec' -d 'One-shot run with final answer'
 complete -c darkmage -f -a 'process' -d 'Background processes'
 complete -c darkmage -f -a 'payment' -d 'Payments and billing'
@@ -2891,6 +2978,7 @@ complete -c darkmage -l plan-only -d 'Plan only' -n '__fish_seen_subcommand_from
 complete -c darkmage -l follow -d 'Follow the run' -n '__fish_seen_subcommand_from run'
 complete -c darkmage -l no-follow -d 'Create the run and exit' -n '__fish_seen_subcommand_from run'
 complete -c darkmage -l scope -x -a 'call turn' -d 'Approval scope' -n '__fish_seen_subcommand_from approvals'
+complete -c darkmage -l limit -x -d 'Maximum approvals' -n '__fish_seen_subcommand_from approvals'
 complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
 
 # Subcommand completions
@@ -2900,7 +2988,7 @@ complete -c darkmage -f -a 'list read edit search download upload cp mv rm expor
 complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' -n '__fish_seen_subcommand sync'
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c darkmage -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
-complete -c darkmage -f -a 'approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
+complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
 complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
@@ -3340,11 +3428,28 @@ def build_parser() -> argparse.ArgumentParser:
 
     # approvals
     approvals = sub.add_parser(
-        "approvals", help="Approve or reject pending tool calls"
+        "approvals", help="List, show, approve or reject pending tool calls"
     )
     approvals_sub = approvals.add_subparsers(
         dest="approvals_command", required=True
     )
+
+    p = approvals_sub.add_parser(
+        "list", help="List pending approvals across your runs"
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum approvals to show (1-100, default 50)",
+    )
+    p.set_defaults(func=cmd_approval_list)
+
+    p = approvals_sub.add_parser(
+        "show", help="Show one approval, its summary and decision commands"
+    )
+    p.add_argument("approval_id")
+    p.set_defaults(func=cmd_approval_show)
 
     p = approvals_sub.add_parser(
         "approve", help="Approve a pending tool call (approval_id from events)"

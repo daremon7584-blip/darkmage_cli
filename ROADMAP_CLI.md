@@ -52,7 +52,12 @@
 - `tui <workspace_id> [--run-id <id>]` — полноценный TUI клиент на Textual с лентой событий, компоузером, строкой состояния, цветовым кодированием
 - Убрано ограничение "один активный run на workspace" в бэкенде — plan_only runs идут параллельно, остальные ставятся в очередь
 
-Все 39 тестов проходят, `ruff check` и `mypy` чистые.
+**Approvals listing (10.11.2026):**
+- `approvals list [--limit N] [--json]` — pending approvals по всем своим runs, newest first
+- `approvals show <approval_id> [--json]` — tool, run/session, requested time, bounded summary и команды approve/reject
+- Таблица укладывается в 80 колонок, пустое состояние и 404 без утечки токена; 11 тестов
+
+Все 180 тестов проходят.
 
 ---
 
