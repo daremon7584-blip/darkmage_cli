@@ -54,7 +54,7 @@ class FakeApprovalClient:
         self.get_calls: list[str] = []
         self.token = "super-secret-token"
 
-    def approval_list(self, limit=50):
+    def approval_list(self, limit=50, run_id=None, session_id=None):
         self.list_calls.append(limit)
         if self.error:
             raise self.error
@@ -248,7 +248,7 @@ def test_approval_show_404_is_an_error_without_token_leak(monkeypatch, capsys):
 def test_approval_list_does_not_print_the_client_token(monkeypatch, capsys):
     monkeypatch.setenv("DARKMAGE_TOKEN", "super-secret-token")
     monkeypatch.setattr(
-        DarkmageClient, "approval_list", lambda self, limit=50: [APPROVAL]
+        DarkmageClient, "approval_list", lambda self, limit=50, **_: [APPROVAL]
     )
 
     assert main(["--json", "approvals", "list"]) == 0
@@ -256,3 +256,14 @@ def test_approval_list_does_not_print_the_client_token(monkeypatch, capsys):
     captured = capsys.readouterr()
     assert json.loads(captured.out) == [APPROVAL]
     assert "super-secret-token" not in captured.out + captured.err
+
+
+@patch("darkmage_cli.client.DarkmageClient._request")
+def test_approval_list_filters_by_run_and_session(mock_request):
+    mock_request.return_value = _response(200, [])
+    client = DarkmageClient(base_url="http://localhost:8000", token="t")
+
+    client.approval_list(limit=10, run_id="run-1", session_id="ses-1")
+
+    _, kwargs = mock_request.call_args
+    assert kwargs["params"] == {"limit": 10, "run_id": "run-1", "session_id": "ses-1"}

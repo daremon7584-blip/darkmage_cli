@@ -1594,7 +1594,11 @@ def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> int:
 
 
 def cmd_approval_list(args: argparse.Namespace, client: DarkmageClient) -> int:
-    approvals = client.approval_list(getattr(args, "limit", 50))
+    approvals = client.approval_list(
+        getattr(args, "limit", 50),
+        run_id=getattr(args, "run_id", None),
+        session_id=getattr(args, "session_id", None),
+    )
     if args.json or not sys.stdout.isatty():
         print_json(approvals)
         return 0
@@ -3159,7 +3163,7 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create get message answer context revert review patch stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
             ;;
         approvals)
-            COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
             ;;
         process)
             COMPREPLY=( $(compgen -W 'start output stop --json' -- "$cur") )
@@ -3271,7 +3275,9 @@ _darkmage() {
                 approvals)
                     _arguments '1:subcommand:(list show approve reject)' \
                         '--scope[Approval scope]:scope:(call turn)' \
-                        '--limit[Maximum approvals]:limit:'
+                        '--limit[Maximum approvals]:limit:' \
+                        '--run-id[Only this run]:run id:' \
+                        '--session-id[Only this session]:session id:'
                     ;;
                 complete|completion)
                     _values 'shell' bash zsh fish
@@ -3847,6 +3853,8 @@ def build_parser() -> argparse.ArgumentParser:
         default=50,
         help="Maximum approvals to show (1-100, default 50)",
     )
+    p.add_argument("--run-id", help="Only approvals for this run")
+    p.add_argument("--session-id", help="Only approvals for this session")
     p.set_defaults(func=cmd_approval_list)
 
     p = approvals_sub.add_parser(

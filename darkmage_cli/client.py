@@ -450,9 +450,23 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
-    def approval_list(self, limit: int = 50) -> list:
-        """Pending approvals across the current user's runs, newest first."""
-        resp = self._request("GET", "/approvals", params={"limit": limit})
+    def approval_list(
+        self,
+        limit: int = 50,
+        run_id: str | None = None,
+        session_id: str | None = None,
+    ) -> list:
+        """Pending approvals across the current user's runs, newest first.
+
+        ``run_id``/``session_id`` narrow the list server-side; ownership is
+        still enforced, so a foreign id returns an empty list.
+        """
+        params: dict[str, object] = {"limit": limit}
+        if run_id:
+            params["run_id"] = run_id
+        if session_id:
+            params["session_id"] = session_id
+        resp = self._request("GET", "/approvals", params=params)
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
