@@ -963,6 +963,114 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- admin: publish moderation ---
+    def admin_publish_reports(
+        self,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list:
+        """Recent abuse reports, newest first, with slug and moderation state."""
+        params: dict[str, object] = {"limit": limit}
+        if status:
+            params["status"] = status
+        resp = self._request("GET", "/admin/publish/reports", params=params)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_publish_resolve(
+        self,
+        report_id: str,
+        decision: str,
+        note: str | None = None,
+    ) -> dict:
+        """Resolve one report with ``dismiss`` or ``remove``.
+
+        The moderation stream uses ``decision``. The earlier endpoint used
+        ``action=resolved|dismissed``; both keys are sent so an older backend
+        still records the correct report status (extra fields are ignored).
+        """
+        body: dict[str, Any] = {
+            "decision": decision,
+            "action": "dismissed" if decision == "dismiss" else "resolved",
+        }
+        if note:
+            body["note"] = note
+        resp = self._request(
+            "POST",
+            f"/admin/publish/reports/{quote(report_id, safe='')}/resolve",
+            json=body,
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_publish_apps(
+        self,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list:
+        """Bounded moderation view of published apps, newest first."""
+        params: dict[str, object] = {"limit": limit}
+        if status:
+            params["status"] = status
+        resp = self._request("GET", "/admin/publish/apps", params=params)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_publish_block(
+        self,
+        app_id: str,
+        ban_owner: bool = False,
+    ) -> dict:
+        """Take one app offline; optionally ban its owner from publishing.
+
+        The moderation stream serves ``/admin/publish/{id}/block``. The older
+        main checkout serves ``/admin/publish/apps/{id}/block`` and bans the
+        owner through a separate users route, so the client falls back to that
+        shape only when the first route is absent.
+        """
+        path_id = quote(app_id, safe="")
+        body = {"ban_owner": ban_owner}
+        try:
+            resp = self._request("POST", f"/admin/publish/{path_id}/block", json=body)
+            self._raise_for_status(resp)
+        except DarkmageError as exc:
+            if exc.status_code != 404:
+                raise
+            resp = self._request(
+                "POST", f"/admin/publish/apps/{path_id}/block", json=body
+            )
+            self._raise_for_status(resp)
+        data = self._json_or_text(resp)
+        if (
+            ban_owner
+            and isinstance(data, dict)
+            and "owner_publish_banned" not in data
+            and data.get("owner_id") is not None
+        ):
+            # Older backend: block and owner-ban are separate decisions.
+            ban = self._request(
+                "POST",
+                f"/admin/publish/users/{int(data['owner_id'])}/ban",
+                json={},
+            )
+            self._raise_for_status(ban)
+        return data
+
+    def admin_publish_unblock(self, app_id: str) -> dict:
+        """Restore a blocked app; the owner ban remains a separate decision."""
+        path_id = quote(app_id, safe="")
+        try:
+            resp = self._request("POST", f"/admin/publish/{path_id}/unblock")
+            self._raise_for_status(resp)
+        except DarkmageError as exc:
+            if exc.status_code != 404:
+                raise
+            resp = self._request(
+                "POST", f"/admin/publish/apps/{path_id}/unblock"
+            )
+            self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     # --- git (Phase 3, requires backend GitHub App integration) ---
     def git_clone(self, workspace_id: str, url: str, ref: str | None = None, depth: int = 1) -> dict:
         body: dict[str, Any] = {"url": url, "depth": depth}

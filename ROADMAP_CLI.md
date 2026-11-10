@@ -100,7 +100,16 @@
 - bash/zsh/fish completion и help; backend не отдаёт last_seen, поэтому колонка показывает `-` (совместимо с будущим полем)
 - 52 теста admin MCP; полный CLI suite — 347 тестов
 
-Все 347 тестов проходят.
+**Admin publish moderation (10.11.2026):**
+- `admin publish reports [--status open|resolved|dismissed] [--limit 50] [--json]` — `GET /admin/publish/reports`; таблица id-префикс/app/slug/reason/status/date, не шире 80 колонок
+- `admin publish resolve <report_id> --decision dismiss|remove [--note TEXT] [--yes] [--json]` — обязательный `--decision` проверяется локально (exit 2); `dismiss` безопасен, `remove` предупреждает/спрашивает и требует `--yes` вне TTY или с `--json`
+- `admin publish apps [--status published|draft|disabled|expired] [--limit 50] [--json]` — `GET /admin/publish/apps`; id/slug/status/owner ban/open reports, 80 колонок
+- `admin publish block <app_id> [--ban-owner] [--yes] [--json]` — `POST /admin/publish/{id}/block`; `--ban-owner` требует `--yes` вне TTY; fallback на старый `/admin/publish/apps/{id}/block` + отдельный owners ban
+- `admin publish unblock <app_id> [--json]` — `POST /admin/publish/{id}/unblock`; owner ban remains separate; fallback на старый путь
+- 404 не-админа/не найдено → `Admin only or not found` (exit 2), 409/422 — понятные ошибки без traceback и токена; JSON — сырые ответы API; bash/zsh/fish completion и help
+- 43 теста admin publish; полный CLI suite — 390 тестов
+
+Все 390 тестов проходят.
 
 ---
 
@@ -295,6 +304,7 @@ darkmage payment create|list
 darkmage admin status
 darkmage admin skills list|show|gate|scan|approve|reject ...
 darkmage admin mcp list|show|approve|call <tool> [--hash SHA256] [--yes] [--args JSON]
+darkmage admin publish reports|resolve|apps|block|unblock ...
 darkmage term <workspace_id>
 darkmage tui <workspace_id> [--run-id <id>]
 darkmage git clone|commit|push|pr <ws> ...

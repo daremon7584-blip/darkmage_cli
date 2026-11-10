@@ -12,6 +12,7 @@ import shutil
 import sys
 import textwrap
 import threading
+import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
@@ -3539,6 +3540,436 @@ def cmd_admin_mcp_call(args: argparse.Namespace, client: DarkmageClient) -> int:
     return 0 if ok else 1
 
 
+# ---------------------------------------------------------------------------
+# Admin publish moderation (/admin/publish)
+# ---------------------------------------------------------------------------
+
+_ADMIN_PUBLISH_REPORT_STATUSES = ("open", "resolved", "dismissed")
+_ADMIN_PUBLISH_APP_STATUSES = ("published", "draft", "disabled", "expired")
+_ADMIN_PUBLISH_DECISIONS = ("dismiss", "remove")
+_ADMIN_PUBLISH_LIMIT_MAX = 200
+_ADMIN_PUBLISH_ID_CHARS = 12
+
+
+def _admin_publish_local_error(
+    args: argparse.Namespace,
+    message: str,
+    *,
+    code: str = "invalid_request",
+    status_code: int | None = None,
+) -> int:
+    """Report a validation or safety error before/without a mutating call."""
+    if getattr(args, "json", False):
+        print_json(
+            {
+                "schema_version": 1,
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "status_code": status_code,
+                    "retryable": False,
+                },
+            }
+        )
+    else:
+        print(f"Error: {message}", file=sys.stderr)
+    return 2
+
+
+def _admin_publish_request(
+    args: argparse.Namespace,
+    call: Callable[[], Any],
+    *,
+    not_found: str,
+) -> tuple[Any, int | None]:
+    """Run one moderation call and normalize 404/409/422 errors.
+
+    ``require_admin`` hides non-admins behind a 404, so the raw status would
+    be ambiguous. Error text comes from the API detail only; request headers
+    and the bearer token are never included.
+    """
+    try:
+        return call(), None
+    except DarkmageError as exc:
+        if exc.status_code == 404:
+            return None, _admin_publish_local_error(
+                args,
+                f"Admin only or not found: {not_found}",
+                code="admin_only_or_not_found",
+                status_code=404,
+            )
+        if exc.status_code == 409:
+            return None, _admin_publish_local_error(
+                args, str(exc), code="conflict", status_code=409
+            )
+        if exc.status_code == 422:
+            return None, _admin_publish_local_error(
+                args, str(exc), code="invalid_request", status_code=422
+            )
+        raise
+
+
+def _admin_publish_uuid(
+    args: argparse.Namespace,
+    raw: Any,
+    *,
+    label: str,
+    code: str,
+) -> tuple[str | None, int | None]:
+    """Validate a UUID before it becomes part of an API path."""
+    try:
+        return str(uuid.UUID(str(raw))), None
+    except (AttributeError, TypeError, ValueError):
+        return None, _admin_publish_local_error(
+            args,
+            f"Invalid {label} {raw!r}: expected a UUID",
+            code=code,
+        )
+
+
+def _admin_publish_limit(
+    args: argparse.Namespace, limit: Any
+) -> tuple[int | None, int | None]:
+    if not isinstance(limit, int) or isinstance(limit, bool):
+        return None, _admin_publish_local_error(
+            args, "Invalid --limit: expected an integer", code="invalid_limit"
+        )
+    if not 1 <= limit <= _ADMIN_PUBLISH_LIMIT_MAX:
+        return None, _admin_publish_local_error(
+            args,
+            f"Invalid --limit {limit}: expected 1-{_ADMIN_PUBLISH_LIMIT_MAX}",
+            code="invalid_limit",
+        )
+    return limit, None
+
+
+def _admin_publish_short_id(value: Any) -> str:
+    text = str(value or "").strip()
+    return text[:_ADMIN_PUBLISH_ID_CHARS] if text else "-"
+
+
+def _admin_publish_yes_no(value: Any) -> str:
+    if value is None:
+        return "-"
+    return "yes" if bool(value) else "no"
+
+
+def _admin_publish_report_app(report: dict[str, Any]) -> str:
+    title = str(report.get("title") or "").strip()
+    if title:
+        return title
+    app_id = report.get("app_id")
+    return _admin_publish_short_id(app_id) if app_id else "-"
+
+
+def _admin_publish_confirm(
+    args: argparse.Namespace,
+    action: str,
+) -> bool:
+    """Confirm a destructive moderation action.
+
+    ``--yes`` is mandatory when stdin/stdout is not a terminal and whenever
+    JSON output is requested, so a script never blocks on a prompt and stdout
+    stays machine-readable.
+    """
+    if getattr(args, "yes", False):
+        return True
+    if getattr(args, "json", False) or not _is_interactive_session():
+        _admin_publish_local_error(
+            args,
+            f"{action}: confirmation required in non-interactive mode; "
+            "re-run with --yes",
+            code="confirmation_required",
+        )
+        return False
+    if not _confirm_destructive(action, False):
+        print("Cancelled.", file=sys.stderr)
+        return False
+    return True
+
+
+def cmd_admin_publish_reports(
+    args: argparse.Namespace, client: DarkmageClient
+) -> int:
+    limit, error = _admin_publish_limit(args, getattr(args, "limit", 50))
+    if error is not None:
+        return error
+    assert limit is not None
+
+    reports, error = _admin_publish_request(
+        args,
+        lambda: client.admin_publish_reports(getattr(args, "status", None), limit),
+        not_found="the publish report list endpoint",
+    )
+    if error is not None:
+        return error
+    if not isinstance(reports, list):
+        return _admin_publish_local_error(
+            args,
+            "Unexpected response from the publish report API",
+            code="invalid_response",
+        )
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(reports)
+        return 0
+    if not reports:
+        print("No abuse reports.")
+        return 0
+
+    print("Abuse reports:")
+    _print_table(
+        ["ID", "APP", "SLUG", "REASON", "STATUS", "DATE"],
+        [
+            [
+                _admin_publish_short_id(report.get("id")),
+                _admin_publish_report_app(report),
+                report.get("slug") or "-",
+                report.get("reason") or "-",
+                report.get("status") or "-",
+                _short_requested_at(report.get("created_at")) or "-",
+            ]
+            for report in reports
+            if isinstance(report, dict)
+        ],
+        min_widths=[_ADMIN_PUBLISH_ID_CHARS, 6, 6, 6, 8, 16],
+        drop_order=[2, 1, 3],
+    )
+    print("IDs are shortened; use --json for full values.")
+    return 0
+
+
+def cmd_admin_publish_resolve(
+    args: argparse.Namespace, client: DarkmageClient
+) -> int:
+    report_id, error = _admin_publish_uuid(
+        args,
+        getattr(args, "report_id", None),
+        label="report id",
+        code="invalid_report_id",
+    )
+    if error is not None:
+        return error
+    assert report_id is not None
+
+    decision = getattr(args, "decision", None)
+    if decision is None:
+        return _admin_publish_local_error(
+            args,
+            "Missing --decision: choose dismiss or remove",
+            code="missing_decision",
+        )
+    if decision not in _ADMIN_PUBLISH_DECISIONS:
+        return _admin_publish_local_error(
+            args,
+            f"Invalid --decision {decision!r}: choose dismiss or remove",
+            code="invalid_decision",
+        )
+
+    note = getattr(args, "note", None)
+    if note is not None:
+        note = str(note).strip() or None
+
+    if decision == "remove":
+        action = (
+            f"Remove report {report_id} and disable the reported app "
+            "(the snapshot is deleted later)"
+        )
+        if not _admin_publish_confirm(args, action):
+            return 2
+
+    report, error = _admin_publish_request(
+        args,
+        lambda: client.admin_publish_resolve(report_id, decision, note),
+        not_found=f"report {report_id}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(report, dict):
+        return _admin_publish_local_error(
+            args,
+            "Unexpected response from the publish report API",
+            code="invalid_response",
+        )
+
+    # The older endpoint closes the report but does not disable the app; make
+    # ``remove`` mean the same thing on both API shapes.
+    app_status = str(report.get("app_status") or "")
+    if decision == "remove" and app_status not in ("blocked", "disabled"):
+        app_id = report.get("app_id")
+        if app_id:
+            _blocked, error = _admin_publish_request(
+                args,
+                lambda: client.admin_publish_block(str(app_id), False),
+                not_found=f"published app {app_id}",
+            )
+            if error is not None:
+                return error
+
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(report)
+        return 0
+
+    width = _terminal_width()
+    print(f"Report: {report.get('id') or report_id}")
+    _print_wrapped_field("Status", report.get("status") or "-", width=width)
+    _print_wrapped_field("Decision", decision, width=width)
+    _print_wrapped_field(
+        "App",
+        f"{report.get('title') or '-'} ({report.get('slug') or '-'})",
+        width=width,
+    )
+    _print_wrapped_field(
+        "Note", report.get("resolution") or note or "-", width=width
+    )
+    _print_wrapped_field("Resolved at", report.get("resolved_at") or "-", width=width)
+    return 0
+
+
+def cmd_admin_publish_apps(
+    args: argparse.Namespace, client: DarkmageClient
+) -> int:
+    limit, error = _admin_publish_limit(args, getattr(args, "limit", 50))
+    if error is not None:
+        return error
+    assert limit is not None
+
+    apps, error = _admin_publish_request(
+        args,
+        lambda: client.admin_publish_apps(getattr(args, "status", None), limit),
+        not_found="the publish app list endpoint",
+    )
+    if error is not None:
+        return error
+    if not isinstance(apps, list):
+        return _admin_publish_local_error(
+            args,
+            "Unexpected response from the publish app API",
+            code="invalid_response",
+        )
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(apps)
+        return 0
+    if not apps:
+        print("No published apps.")
+        return 0
+
+    print("Published apps:")
+    _print_table(
+        ["ID", "SLUG", "STATUS", "OWNER BAN", "REPORTS"],
+        [
+            [
+                app.get("id", ""),
+                app.get("slug", ""),
+                app.get("status", ""),
+                _admin_publish_yes_no(app.get("owner_publish_banned")),
+                app.get("open_reports", "-"),
+            ]
+            for app in apps
+            if isinstance(app, dict)
+        ],
+        min_widths=[36, 8, 9, 9, 7],
+        drop_order=[1, 4, 3],
+    )
+    return 0
+
+
+def cmd_admin_publish_block(
+    args: argparse.Namespace, client: DarkmageClient
+) -> int:
+    app_id, error = _admin_publish_uuid(
+        args,
+        getattr(args, "app_id", None),
+        label="app id",
+        code="invalid_app_id",
+    )
+    if error is not None:
+        return error
+    assert app_id is not None
+
+    ban_owner = bool(getattr(args, "ban_owner", False))
+    if ban_owner and not _admin_publish_confirm(
+        args, f"Block app {app_id} and ban its owner from publishing"
+    ):
+        return 2
+
+    data, error = _admin_publish_request(
+        args,
+        lambda: client.admin_publish_block(app_id, ban_owner),
+        not_found=f"published app {app_id}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(data, dict):
+        return _admin_publish_local_error(
+            args,
+            "Unexpected response from the publish app API",
+            code="invalid_response",
+        )
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+
+    if "owner_publish_banned" in data:
+        owner_banned = _admin_publish_yes_no(data.get("owner_publish_banned"))
+    else:
+        # Older backend: a successful separate ban is why we got here.
+        owner_banned = "yes" if ban_owner else "-"
+    width = _terminal_width()
+    print(f"Blocked app: {data.get('id') or app_id}")
+    _print_wrapped_field("Slug", data.get("slug") or "-", width=width)
+    _print_wrapped_field("Status", data.get("status") or "-", width=width)
+    _print_wrapped_field(
+        "Moderation", data.get("moderation_status") or "-", width=width
+    )
+    _print_wrapped_field("Owner banned", owner_banned, width=width)
+    return 0
+
+
+def cmd_admin_publish_unblock(
+    args: argparse.Namespace, client: DarkmageClient
+) -> int:
+    app_id, error = _admin_publish_uuid(
+        args,
+        getattr(args, "app_id", None),
+        label="app id",
+        code="invalid_app_id",
+    )
+    if error is not None:
+        return error
+    assert app_id is not None
+
+    data, error = _admin_publish_request(
+        args,
+        lambda: client.admin_publish_unblock(app_id),
+        not_found=f"published app {app_id}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(data, dict):
+        return _admin_publish_local_error(
+            args,
+            "Unexpected response from the publish app API",
+            code="invalid_response",
+        )
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+
+    width = _terminal_width()
+    print(f"Unblocked app: {data.get('id') or app_id}")
+    _print_wrapped_field("Slug", data.get("slug") or "-", width=width)
+    _print_wrapped_field("Status", data.get("status") or "-", width=width)
+    _print_wrapped_field(
+        "Moderation", data.get("moderation_status") or "-", width=width
+    )
+    _print_wrapped_field(
+        "Owner banned",
+        _admin_publish_yes_no(data.get("owner_publish_banned")),
+        width=width,
+    )
+    return 0
+
+
 async def _relay_terminal(
     ws: Any,
     read_stdin: Callable[[], Awaitable[bytes]],
@@ -4555,7 +4986,10 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
             ;;
         admin)
-            COMPREPLY=( $(compgen -W 'status skills mcp --json' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'status skills mcp publish --json' -- "$cur") )
+            ;;
+        publish)
+            COMPREPLY=( $(compgen -W 'reports resolve apps block unblock --json --status --limit --decision --note --yes --ban-owner' -- "$cur") )
             ;;
         skills)
             COMPREPLY=( $(compgen -W 'list show gate scan approve reject --json --status --name --version --source --report --digest --note --allow-high-risk' -- "$cur") )
@@ -4568,7 +5002,14 @@ _darkmage_complete() {
             fi
             ;;
         --status)
-            COMPREPLY=( $(compgen -W 'approved review blocked rejected' -- "$cur") )
+            if [[ " ${words[*]} " == *" publish "* ]]; then
+                COMPREPLY=( $(compgen -W 'open resolved dismissed published draft disabled expired' -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W 'approved review blocked rejected' -- "$cur") )
+            fi
+            ;;
+        --decision)
+            COMPREPLY=( $(compgen -W 'dismiss remove' -- "$cur") )
             ;;
         --report)
             COMPREPLY=( $(compgen -f -- "$cur") )
@@ -4685,14 +5126,22 @@ _darkmage() {
                         '--session-id[Only this session]:session id:'
                     ;;
                 admin)
-                    if [[ $words[3] == mcp ]]; then
+                    if [[ $words[3] == publish ]]; then
+                        _arguments '1:subcommand:(reports resolve apps block unblock)' \
+                            '--status[Filter by status]:status:(open resolved dismissed published draft disabled expired)' \
+                            '--limit[Maximum rows]:limit:' \
+                            '--decision[Resolution decision]:decision:(dismiss remove)' \
+                            '--note[Resolution note]:note:' \
+                            '--yes[Confirm destructive action]' \
+                            '--ban-owner[Also ban the owner]'
+                    elif [[ $words[3] == mcp ]]; then
                         _arguments '1:subcommand:(list show approve call)' \
                             '--json[Output JSON]' \
                             '--hash[Current schema hash]:hash:' \
                             '--yes[Confirm approval when --hash is omitted]' \
                             '--args[Tool arguments as JSON]:json:'
                     else
-                        _arguments '1:subcommand:(status skills mcp)' \
+                        _arguments '1:subcommand:(status skills mcp publish)' \
                             '2:subcommand:(list show gate scan approve reject)' \
                             '--status[Filter by status]:status:(approved review blocked rejected)' \
                             '--name[Skill name]:name:' \
@@ -4777,6 +5226,7 @@ complete -c darkmage -l limit -x -d 'Maximum approvals' -n '__fish_seen_subcomma
 # admin / skills options: --status --name --version --source --report --digest
 # --note --allow-high-risk
 # admin mcp options: --hash --yes --args
+# admin publish options: --status --limit --decision --note --yes --ban-owner
 complete -c darkmage -l status -x -a 'approved review blocked rejected' -d 'Skill scan status' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l name -r -d 'Skill name' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l version -r -d 'Skill version' -n '__fish_seen_subcommand_from skills'
@@ -4788,6 +5238,12 @@ complete -c darkmage -l allow-high-risk -d 'Override a blocked scan' -n '__fish_
 complete -c darkmage -l hash -r -d 'Current MCP schema hash' -n '__fish_seen_subcommand_from mcp'
 complete -c darkmage -l yes -d 'Confirm MCP approval when --hash is omitted' -n '__fish_seen_subcommand_from mcp'
 complete -c darkmage -l args -r -d 'MCP tool arguments as JSON' -n '__fish_seen_subcommand_from mcp'
+complete -c darkmage -l status -x -a 'open resolved dismissed published draft disabled expired' -d 'Publish moderation status' -n '__fish_seen_subcommand_from publish'
+complete -c darkmage -l limit -x -d 'Maximum publish rows' -n '__fish_seen_subcommand_from publish'
+complete -c darkmage -l decision -x -a 'dismiss remove' -d 'Report resolution decision' -n '__fish_seen_subcommand_from publish'
+complete -c darkmage -l note -r -d 'Resolution note' -n '__fish_seen_subcommand_from publish'
+complete -c darkmage -l ban-owner -d 'Also ban the app owner' -n '__fish_seen_subcommand_from publish'
+complete -c darkmage -l yes -d 'Confirm destructive publish action' -n '__fish_seen_subcommand_from publish'
 complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
 
 # Subcommand completions
@@ -4798,9 +5254,10 @@ complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' 
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c darkmage -f -a 'create get queue message answer context revert review patch stop list events verification' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
-complete -c darkmage -f -a 'status skills mcp' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
+complete -c darkmage -f -a 'status skills mcp publish' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
 complete -c darkmage -f -a 'list show gate scan approve reject' -d 'skills subcommands' -n '__fish_seen_subcommand skills'
 complete -c darkmage -f -a 'list show approve call' -d 'admin mcp subcommands' -n '__fish_seen_subcommand_from admin; and __fish_seen_subcommand_from mcp'
+complete -c darkmage -f -a 'reports resolve apps block unblock' -d 'admin publish subcommands' -n '__fish_seen_subcommand_from admin; and __fish_seen_subcommand_from publish'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
 complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
@@ -5511,6 +5968,88 @@ def build_parser() -> argparse.ArgumentParser:
         help="Tool arguments as a JSON object",
     )
     p.set_defaults(func=cmd_admin_mcp_call)
+
+    publish = admin_sub.add_parser(
+        "publish",
+        help="Abuse reports and published-app moderation (admin only)",
+    )
+    publish_sub = publish.add_subparsers(
+        dest="publish_command", required=True
+    )
+
+    p = publish_sub.add_parser("reports", help="List abuse reports")
+    p.add_argument(
+        "--status",
+        choices=list(_ADMIN_PUBLISH_REPORT_STATUSES),
+        default=None,
+        help="Only reports with this status",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum reports to show (1-200, default 50)",
+    )
+    p.set_defaults(func=cmd_admin_publish_reports)
+
+    p = publish_sub.add_parser(
+        "resolve", help="Resolve or dismiss one abuse report"
+    )
+    p.add_argument("report_id", help="Report UUID")
+    p.add_argument(
+        "--decision",
+        choices=list(_ADMIN_PUBLISH_DECISIONS),
+        default=None,
+        help="dismiss closes the report; remove also disables the app",
+    )
+    p.add_argument("--note", default=None, help="Resolution note")
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Confirm remove without a prompt",
+    )
+    p.set_defaults(func=cmd_admin_publish_resolve)
+
+    p = publish_sub.add_parser(
+        "apps", help="List published apps for moderation"
+    )
+    p.add_argument(
+        "--status",
+        choices=list(_ADMIN_PUBLISH_APP_STATUSES),
+        default=None,
+        help="Only apps with this status",
+    )
+    p.add_argument(
+        "--limit",
+        type=int,
+        default=50,
+        help="Maximum apps to show (1-200, default 50)",
+    )
+    p.set_defaults(func=cmd_admin_publish_apps)
+
+    p = publish_sub.add_parser("block", help="Take one published app offline")
+    p.add_argument("app_id", help="Published app UUID")
+    p.add_argument(
+        "--ban-owner",
+        dest="ban_owner",
+        action="store_true",
+        default=False,
+        help="Also ban the owner from publishing (needs --yes off a TTY)",
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Confirm --ban-owner without a prompt",
+    )
+    p.set_defaults(func=cmd_admin_publish_block)
+
+    p = publish_sub.add_parser(
+        "unblock", help="Restore one blocked published app"
+    )
+    p.add_argument("app_id", help="Published app UUID")
+    p.set_defaults(func=cmd_admin_publish_unblock)
 
     # exec (-p is normalized to this command in main)
     p = sub.add_parser("exec", help="One-shot: создать run, дождаться ответа")
