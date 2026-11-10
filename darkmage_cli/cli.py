@@ -12,7 +12,7 @@ import shutil
 import sys
 import textwrap
 import threading
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any, Awaitable, Callable, cast
 
@@ -1145,6 +1145,144 @@ def cmd_run_create(args: argparse.Namespace, client: DarkmageClient) -> int:
     return 0
 
 
+_QUEUE_UNAVAILABLE = "queue information is not available"
+
+
+def _humanize_seconds(value: Any) -> str:
+    """Human-readable duration for a queue wait estimate."""
+    if value is None:
+        return "unknown"
+    try:
+        seconds = max(0, int(value))
+    except (TypeError, ValueError):
+        return "unknown"
+    if seconds < 60:
+        return f"{seconds}s"
+    minutes = (seconds + 59) // 60
+    if minutes < 60:
+        return f"{minutes} min"
+    hours, minutes = divmod(minutes, 60)
+    if hours < 24:
+        return f"{hours} h" + (f" {minutes} min" if minutes else "")
+    days, hours = divmod(hours, 24)
+    return f"{days} d" + (f" {hours} h" if hours else "")
+
+
+def _format_eta(value: Any) -> str:
+    text = _humanize_seconds(value)
+    return text if text == "unknown" else f"~{text}"
+
+
+def _short_expiry(value: Any) -> str:
+    """``2026-11-10T12:05:00+00:00`` -> ``2026-11-10 12:05 UTC``."""
+    text = str(value or "")
+    if not text:
+        return "-"
+    try:
+        parsed = datetime.fromisoformat(text.replace("Z", "+00:00"))
+    except ValueError:
+        return text
+    if parsed.tzinfo is not None:
+        return parsed.astimezone(timezone.utc).strftime("%Y-%m-%d %H:%M UTC")
+    return parsed.strftime("%Y-%m-%d %H:%M")
+
+
+def _queue_summary(queue: dict[str, Any]) -> str:
+    parts = [
+        f"position {queue.get('position', '?')}",
+        f"ahead {queue.get('ahead', '?')}",
+        f"ETA {_format_eta(queue.get('estimated_wait_seconds'))}",
+    ]
+    expires_at = _short_expiry(queue.get("expires_at"))
+    if expires_at != "-":
+        parts.append(f"expires {expires_at}")
+    parts.append("trial queue" if queue.get("trial") else "paid queue")
+    return ", ".join(parts)
+
+
+def _run_is_queued(run: dict[str, Any]) -> bool:
+    return run.get("status") == "queued" or isinstance(run.get("queue"), dict)
+
+
+def _run_queue_cell(run: dict[str, Any]) -> str:
+    """Compact queue place for the list table; legacy field is 0-based ahead."""
+    queue = run.get("queue")
+    if isinstance(queue, dict) and queue:
+        position = queue.get("position")
+        return f"#{position}" if position is not None else "?"
+    legacy = run.get("queue_position")
+    if legacy is not None:
+        try:
+            return f"#{int(legacy) + 1}"
+        except (TypeError, ValueError):
+            return "?"
+    return "queued"
+
+
+def _queue_error_message(run_id: str, exc: DarkmageError) -> str:
+    """Map run lookup failures to clear, token-free queue messages."""
+    status = exc.status_code
+    raw = str(exc)
+    if status is None:
+        match = re.match(r"(\d{3})\b", raw)
+        if match:
+            status = int(match.group(1))
+    if status == 404:
+        return (
+            f"Run {run_id} not found (HTTP 404). Check the id, or wait a "
+            "moment if the run was just created."
+        )
+    if status == 403:
+        return (
+            f"Access denied for run {run_id} (HTTP 403). Queue information is "
+            "only available for runs you own."
+        )
+    return raw
+
+
+def cmd_run_queue(args: argparse.Namespace, client: DarkmageClient) -> int:
+    run_id = args.run_id
+    try:
+        data = client.run_queue(run_id)
+    except DarkmageError as exc:
+        message = _queue_error_message(run_id, exc)
+        if getattr(args, "json", False):
+            raise DarkmageError(
+                message,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            ) from exc
+        print(f"Error: {message}", file=sys.stderr)
+        return 1
+
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+
+    status = str(data.get("status") or "")
+    queue = data.get("queue")
+    print(f"Run:        {data.get('id') or run_id}")
+    print(f"Status:     {_color_status(status)}")
+    if not isinstance(queue, dict) or not queue:
+        if status == "queued":
+            print(
+                f"Queue:      {_QUEUE_UNAVAILABLE} (it may have expired or "
+                "the worker is about to claim it)."
+            )
+        else:
+            print(
+                f"Not queued: this run is {status or 'not queued'}; "
+                "there is no queue place."
+            )
+        return 0
+    print(f"Position:   {queue.get('position', '?')}")
+    print(f"Ahead:      {queue.get('ahead', '?')}")
+    print(f"ETA:        {_format_eta(queue.get('estimated_wait_seconds'))}")
+    print(f"Expires:    {_short_expiry(queue.get('expires_at'))}")
+    print(f"Queue type: {'trial' if queue.get('trial') else 'paid'}")
+    return 0
+
+
 def cmd_run_get(args: argparse.Namespace, client: DarkmageClient) -> None:
     data = client.run_get(args.run_id)
     if args.json or not sys.stdout.isatty():
@@ -1157,6 +1295,11 @@ def cmd_run_get(args: argparse.Namespace, client: DarkmageClient) -> None:
     print(f"Промпт:     {data.get('prompt', '')[:100]}")
     print(f"Чекпоинт:   {data.get('checkpoint_status', '')}")
     print(f"Создан:     {data.get('created_at', '')}")
+    queue = data.get("queue")
+    if isinstance(queue, dict) and queue:
+        _print_wrapped_field("Queue", _queue_summary(queue))
+    elif data.get("status") == "queued":
+        _print_wrapped_field("Queue", _QUEUE_UNAVAILABLE)
     if data.get("started_at"):
         print(f"Начат:      {data.get('started_at')}")
     if data.get("finished_at"):
@@ -1544,20 +1687,34 @@ def cmd_run_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     if args.json or not sys.stdout.isatty():
         print_json(runs)
         return
-    _print_table(
-        ["ID", "Статус", "Модель", "Промпт", "Создан"],
-        [
+    show_queue = any(_run_is_queued(run) for run in runs)
+    headers = ["ID", "Статус"]
+    min_widths = [40, 16]
+    drop_order = [2]
+    if show_queue:
+        headers.append("Очередь")
+        min_widths.append(7)
+        drop_order = [3]
+    headers.extend(["Модель", "Промпт", "Создан"])
+    min_widths.extend([6, 8, 10])
+    rows = []
+    for run in runs:
+        row = [run.get("id", ""), run.get("status", "")]
+        if show_queue:
+            row.append(_run_queue_cell(run))
+        row.extend(
             [
-                r.get("id", ""),
-                r.get("status", ""),
-                r.get("model") or "-",
-                r.get("prompt", ""),
-                r.get("created_at", "")[:10],
+                run.get("model") or "-",
+                run.get("prompt", ""),
+                run.get("created_at", "")[:10],
             ]
-            for r in runs
-        ],
-        min_widths=[40, 16, 6, 8, 10],
-        drop_order=[2],
+        )
+        rows.append(row)
+    _print_table(
+        headers,
+        rows,
+        min_widths=min_widths,
+        drop_order=drop_order,
     )
     if not runs:
         print("Нет ran.")
@@ -4145,7 +4302,7 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create list new all runs files read' -- "$cur") )
             ;;
         run)
-            COMPREPLY=( $(compgen -W 'create get message answer context revert review patch stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create get queue message answer context revert review patch stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
             ;;
         approvals)
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
@@ -4259,7 +4416,7 @@ _darkmage() {
         args)
             case $words[2] in
                 run)
-                    _arguments '1:subcommand:(create get message answer context revert review patch stop list events)' \\
+                    _arguments '1:subcommand:(create get queue message answer context revert review patch stop list events)' \\
                         '--stat[Show per-file +/- summary]' \\
                         '--output[Write exact patch bytes]:file:_files' \\
                         '--no-color[Disable diff colors]' \\
@@ -4392,7 +4549,7 @@ complete -c darkmage -f -a 'create list get update start stop delete apk godot b
 complete -c darkmage -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
 complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' -n '__fish_seen_subcommand sync'
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
-complete -c darkmage -f -a 'create get message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c darkmage -f -a 'create get queue message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
 complete -c darkmage -f -a 'status skills mcp' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
 complete -c darkmage -f -a 'list show gate scan approve reject' -d 'skills subcommands' -n '__fish_seen_subcommand skills'
@@ -4792,6 +4949,20 @@ def build_parser() -> argparse.ArgumentParser:
     p = runs_sub.add_parser("get", help="Get run")
     p.add_argument("run_id")
     p.set_defaults(func=cmd_run_get)
+
+    p = runs_sub.add_parser(
+        "queue",
+        help="Show queue position and ETA for a queued run",
+        description=(
+            "Show where an owned run waits: status, position, tasks ahead, "
+            "humanized ETA, expiry and trial/paid queue. Queued runs without "
+            "queue metadata (expired or claimed) are reported as unavailable; "
+            "runs that are not queued show a friendly message. --json returns "
+            "the raw GET /runs/{run_id} object."
+        ),
+    )
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_queue)
 
     p = runs_sub.add_parser("message", help="Send a message to a running task")
     p.add_argument("run_id")

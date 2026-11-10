@@ -446,6 +446,15 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def run_queue(self, run_id: str) -> dict:
+        """Return a run with its queue metadata.
+
+        Queue place is part of ``GET /runs/{run_id}``; there is no separate
+        queue endpoint.  Keeping a named method makes the CLI contract explicit
+        while still returning the raw API object.
+        """
+        return self.run_get(run_id)
+
     def run_stop(self, run_id: str) -> dict:
         resp = self._request("POST", f"/runs/{run_id}/stop")
         self._raise_for_status(resp)

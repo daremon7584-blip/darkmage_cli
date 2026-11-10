@@ -86,6 +86,7 @@ darkmage session read <session_id> <path>      # прочитать файл с�
 
 darkmage run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
 darkmage run get <run_id>
+darkmage run queue <run_id> [--json]                 # queue place, ETA and expiry for a queued run
 darkmage run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)
 darkmage run message <run_id> "additional context"   # or read from stdin with '-'
 darkmage run answer <run_id> <question_id> "yes"      # answer an ask_user question
@@ -172,6 +173,17 @@ darkmage run patch <run_id> --json                  # run_id/files/additions/del
 ```
 
 The endpoint is subscription-gated (HTTP 402); a missing/foreign run is 404, an unfinished run or missing checkpoint is 409, and patches above the server's 16 MiB limit are 413. Errors print a clear message to stderr and exit non-zero without exposing the token.
+
+### Queue visibility
+
+`darkmage run queue <run_id>` shows where a queued run waits: status, 1-based position, tasks ahead, a humanized wait estimate, the queue deadline and whether it is in the trial or paid queue.
+
+```bash
+darkmage run queue <run_id>
+darkmage run queue <run_id> --json   # raw GET /runs/{run_id} object
+```
+
+A run that is not queued gets a friendly `Not queued` message. A queued run whose deadline expired (or whose queue metadata is otherwise gone) reports that queue information is not available instead of a stale position. `darkmage run get <run_id>` adds a compact `Queue:` line when metadata is present, and `darkmage run list <workspace_id>` shows an `Очередь` column only when at least one listed run is queued. Missing or foreign runs return a clear 404 and never print the token.
 
 ### Admin skill gate
 

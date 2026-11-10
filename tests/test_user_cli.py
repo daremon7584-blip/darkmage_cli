@@ -194,7 +194,7 @@ def test_client_methods():
         "workspace_file_put", "workspace_file_delete",
         "workspace_search",
         "session_create", "session_list",
-        "run_create", "run_get", "run_message", "run_answer", "run_context",
+        "run_create", "run_get", "run_queue", "run_message", "run_answer", "run_context",
         "run_revert", "run_review", "run_stop", "run_events", "run_list",
         "tool_call_approve", "tool_call_reject",
         "process_start", "process_output", "process_stop",
