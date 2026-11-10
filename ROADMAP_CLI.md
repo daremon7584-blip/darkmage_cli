@@ -61,7 +61,14 @@
 - `approvals show <approval_id> [--json]` — tool, run/session, requested time, bounded summary и команды approve/reject
 - Таблица укладывается в 80 колонок, пустое состояние и 404 без утечки токена; 11 тестов
 
-Все 180 тестов проходят.
+**Run patch (10.11.2026):**
+- `run patch <run_id> [--stat] [--output PATH] [--no-color] [--force] [--json]` — unified git patch из `GET /runs/{id}/patch`
+- Цвета только на TTY, `--no-color` отключает; не-TTY режим сохраняет байты для пайпа
+- `--stat` — число файлов, additions/deletions и per-file `+/-`; `--output` пишет точные байты и защищает от перезаписи
+- `--json` — `run_id`, `files`, `additions`, `deletions`, `stat[]`, `patch`; пустой патч — пустые массивы
+- 402 (подписка), 404, 409 (не завершён/нет чекпоинта) и 413 (патч > 16 MiB) — понятные ошибки без токена; 28 тестов
+
+Все 208 тестов проходят.
 
 ---
 
@@ -192,7 +199,7 @@
 | `workspace export <path>` | Medium | Есть `/export` в бэкенде |
 | `workspace preview <url>` | Medium | Есть `/preview` в бэкенде |
 | `session archive\|restore` | Low | Есть бэкенд-эндпоинты сессий |
-| `run patch <run_id>` | Medium | Есть `/patch` в бэкенде |
+| `run patch <run_id>` | Medium | ✅ Готово (CLI): `GET /runs/{id}/patch`, `--stat`, `--output`, `--json`, 402/404/409/413 |
 | `run memory-suggestions\|decide` | Low | Есть бэкенд-эндпоинты |
 
 ---

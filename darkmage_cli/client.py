@@ -38,6 +38,23 @@ def _chat_events_from_payload(payload: Any) -> Iterator[dict[str, Any]]:
         yield {"type": "usage", "usage": usage}
 
 
+class _PatchText(str):
+    """Decoded patch text that keeps the exact response bytes.
+
+    ``GET /runs/{id}/patch`` returns ``text/x-patch``.  The CLI prints the
+    decoded text, but ``--output`` must write the original bytes so the file
+    can be fed straight to ``git apply``.  Subclassing ``str`` keeps the public
+    ``run_patch() -> str`` contract while retaining the raw body.
+    """
+
+    raw: bytes
+
+    def __new__(cls, raw: bytes) -> "_PatchText":
+        obj = super().__new__(cls, raw.decode("utf-8", errors="replace"))
+        obj.raw = raw
+        return obj
+
+
 class DarkmageError(Exception):
     """API/transport error with enough context for retry decisions."""
 
@@ -648,6 +665,25 @@ class DarkmageClient:
         resp = self._request("POST", f"/runs/{run_id}/review")
         self._raise_for_status(resp)
         return self._json_or_text(resp)
+
+    def run_patch(self, run_id: str) -> str:
+        """Download a finished run's changes as a unified git patch.
+
+        The response is ``text/x-patch`` (not JSON).  HTTP errors keep their
+        status and detail from :meth:`_raise_for_status`, so callers can map
+        402/404/409/413 to friendly messages; the bearer token never enters
+        the exception text.
+        """
+        resp = self._request(
+            "GET",
+            f"/runs/{run_id}/patch",
+            headers={"Accept": "text/x-patch"},
+        )
+        self._raise_for_status(resp)
+        content = getattr(resp, "content", None)
+        if not isinstance(content, (bytes, bytearray)):
+            content = str(getattr(resp, "text", "") or "").encode("utf-8")
+        return _PatchText(bytes(content))
 
     def run_list(self, workspace_id: str) -> list[dict]:
         resp = self._request(
