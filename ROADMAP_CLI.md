@@ -68,6 +68,13 @@
 - `--json` — `run_id`, `files`, `additions`, `deletions`, `stat[]`, `patch`; пустой патч — пустые массивы
 - 402 (подписка), 404, 409 (не завершён/нет чекпоинта) и 413 (патч > 16 MiB) — понятные ошибки без токена; 28 тестов
 
+**Run queue visibility (10.11.2026):**
+- `run queue <run_id> [--json]` — статус, позиция, сколько задач впереди, человекочитаемый ETA, дедлайн и trial/paid очередь из аддитивного `queue` в `GET /runs/{id}`
+- `run get` добавляет строку `Queue:` при наличии метаданных; `run list` показывает колонку `Очередь` только если хотя бы один run в очереди, и укладывается в 80 колонок (record layout на узких терминалах)
+- Не в очереди — дружелюбное сообщение; queued без метаданных (истёк дедлайн/вот-вот заберёт воркер) — `queue information is not available`
+- `--json` для `run queue` — сырой объект API, для `run get` — прежний объект; 404/403 без traceback и утечки токена
+- bash/zsh/fish completion, help, README; тесты queue text/JSON, not queued, expired/null ETA, trial wording, run get/list, 404, token leak
+
 **Admin skills gate (10.11.2026):**
 - `admin skills list [--status ...] [--json]` — список сканов, таблица в 80 колонок (id/name/status/severity/risk/digest prefix/date)
 - `admin skills show <scan_id> [--json]` — детали, top-5 findings/issues и подсказки approve/reject
