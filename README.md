@@ -123,6 +123,12 @@ darkmage admin mcp show <tool> [--json]              # bounded schema + approval
 darkmage admin mcp approve <tool> [--hash SHA256] [--yes] [--json]
 darkmage admin mcp call <tool> --args '{"key":"value"}' [--json]  # read-only tools only
 
+darkmage admin publish reports [--status open|resolved|dismissed] [--limit 50] [--json]
+darkmage admin publish resolve <report_id> --decision dismiss|remove [--note TEXT] [--yes] [--json]
+darkmage admin publish apps [--status published|draft|disabled|expired] [--limit 50] [--json]
+darkmage admin publish block <app_id> [--ban-owner] [--yes] [--json]
+darkmage admin publish unblock <app_id> [--json]
+
 darkmage term <workspace_id>                   # безопасный relay к удалённому PTY (без локального shell)
 
 darkmage git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
@@ -236,6 +242,28 @@ darkmage admin mcp call github.search --args '{"query":"repo:acme/app bug"}'
 - `call` accepts a JSON object for `--args` and only works for tools in the server's `MCP_READ_ONLY_TOOLS` allowlist. A tool-level failure returns exit 1.
 - Non-admin requests (server 404) render as `Admin only or not found` with exit 2. 409 (schema changed) and 422 (invalid request) errors are clear, token-free and exit 2.
 - `--json` prints an envelope with `schema_version`, `server` and the command payload (`tools`, `tool`, `approved`, or `ok`/`result`/`error`). Errors use the shared `{"schema_version":1,"error":{...}}` envelope.
+
+### Admin publish moderation
+
+`darkmage admin publish` wraps the admin-only abuse-report and static-publish moderation routes (`/admin/publish`). It lists the report queue, resolves or dismisses one report, lists published apps with their owner-ban and open-report state, and takes an app offline or restores it.
+
+```bash
+darkmage admin publish reports --status open
+darkmage admin publish resolve <report_id> --decision dismiss --note "not actionable"
+darkmage admin publish resolve <report_id> --decision remove --note "phishing"   # asks first
+darkmage admin publish resolve <report_id> --decision remove --yes                # scripts/CI
+darkmage admin publish apps --status published
+darkmage admin publish block <app_id>
+darkmage admin publish block <app_id> --ban-owner --yes
+darkmage admin publish unblock <app_id>
+```
+
+- `reports` prints id prefix, app title, slug, reason, status and date in a table capped at 80 columns. `--json` returns the raw API list with full ids (the table uses 12-character id prefixes).
+- `resolve` requires an explicit `--decision`. `dismiss` closes the report without touching the app. `remove` closes it and disables the reported app (the snapshot is removed later by the backend GC); it warns and asks for confirmation, and requires `--yes` when stdin/stdout is not a terminal or `--json` is used.
+- `apps` prints id, slug, status, owner-ban state and the number of open reports in an 80-column table. Filter with `--status published|draft|disabled|expired`.
+- `block` takes the app offline immediately and is reversible; `--ban-owner` also stops the owner from publishing and therefore requires `--yes` in non-interactive/JSON mode. `unblock` restores the app but leaves an owner ban in place (the backend treats them as separate decisions).
+- Non-admin requests (server 404) render as `Admin only or not found` with exit 2. 409 (already closed/not blocked) and 422 (invalid request) errors are clear, token-free and exit 2.
+- `--json` returns raw API objects: a list for `reports`/`apps`, the updated report for `resolve`, and the updated app for `block`/`unblock`.
 
 ## Notes
 
