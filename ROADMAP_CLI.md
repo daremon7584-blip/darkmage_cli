@@ -2,6 +2,10 @@
 
 Цель документа: пошаговый план развития кастомного CLI (`/root/darkmage-cli`) для платформы Darkmage AI (`/root/saas-backend`) с опорой на опыт создания production-CLI (Click/Typer/argparse, структура пакета, конфигурация, аутентификация, вывод, ошибки, тестирование, release).
 
+> **Актуальный следующий этап:** [`docs/CLI_CLIENT_RESEARCH.md`](docs/CLI_CLIENT_RESEARCH.md) — исследование CLI-клиентов LLM-сервисов и план полировки. Там P0: `term` RCE, утечки токенов, `exec`/`-p`, approvals, diff/patch, sessions, async SSE, тесты и дистрибуция. История фаз ниже не отменяет эти P0.
+>
+> **Про тесты:** «39/47 тестов проходят» — историческая цифра. Аудит показал false green в `tests/test_user_cli.py` (нет assert) и запись тестов в реальный `~/.darkmage-cli`; см. раздел 3.3 нового документа.
+
 Источники:
 - `/root/saas-backend/API.md` — контракт REST API
 - `/root/saas-backend/app/schemas.py` — Pydantic-схемы
