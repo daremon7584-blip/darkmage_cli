@@ -95,6 +95,11 @@ darkmage run review <run_id>
 darkmage run stop <run_id>
 darkmage run events <run_id> [--last-event-id N] [--pretty]
 
+darkmage approvals list [--limit 50] [--json]          # pending approvals across your runs
+darkmage approvals show <approval_id> [--json]         # details, bounded summary and command hints
+darkmage approvals approve <approval_id> [--scope call|turn]
+darkmage approvals reject <approval_id>
+
 darkmage process start <workspace_id> <cmd> [args...] [--cwd /workspace] [--port 8080]
 darkmage process output <workspace_id> [process_id]
 darkmage process stop <workspace_id> <process_id>

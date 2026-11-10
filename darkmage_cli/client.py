@@ -433,6 +433,18 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    def approval_list(self, limit: int = 50) -> list:
+        """Pending approvals across the current user's runs, newest first."""
+        resp = self._request("GET", "/approvals", params={"limit": limit})
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def approval_get(self, approval_id: str) -> dict:
+        """One owner-scoped approval by its safe approval id."""
+        resp = self._request("GET", f"/approvals/{approval_id}")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     def tool_call_approve(self, tool_call_id: str, scope: str = "call") -> dict:
         """Approve a pending tool call (``scope`` is ``call`` or ``turn``)."""
         if scope not in ("call", "turn"):
