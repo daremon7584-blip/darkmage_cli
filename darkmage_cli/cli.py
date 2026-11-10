@@ -1186,6 +1186,358 @@ def cmd_run_review(args: argparse.Namespace, client: DarkmageClient) -> None:
     print_json(client.run_review(args.run_id))
 
 
+# ---------------------------------------------------------------------------
+# run patch: unified diff parsing, rendering and error mapping
+# ---------------------------------------------------------------------------
+
+_PATCH_RED = "\033[31m"
+_PATCH_GREEN = "\033[32m"
+_PATCH_HUNK = "\033[36m"
+_PATCH_HEADER = "\033[1m"
+
+
+def _unquote_git_path(value: str) -> str:
+    """Undo git's C-style quoting for paths with spaces/special characters."""
+    value = value.strip()
+    if len(value) >= 2 and value.startswith('"') and value.endswith('"'):
+        try:
+            decoded = json.loads(value)
+        except ValueError:
+            return value[1:-1]
+        if isinstance(decoded, str):
+            return decoded
+        return value[1:-1]
+    return value
+
+
+def _strip_patch_prefix(path: str) -> str:
+    if path.startswith(("a/", "b/")):
+        return path[2:]
+    return path
+
+
+def _patch_diff_git_paths(line: str) -> tuple[str | None, str | None]:
+    rest = line[len("diff --git ") :]
+    try:
+        parts = shlex.split(rest)
+    except ValueError:
+        parts = rest.split()
+    if len(parts) != 2:
+        return None, None
+    old = _strip_patch_prefix(_unquote_git_path(parts[0]))
+    new = _strip_patch_prefix(_unquote_git_path(parts[1]))
+    old = None if old == "/dev/null" else old
+    new = None if new == "/dev/null" else new
+    return old, new
+
+
+def _patch_header_path(raw: str) -> str | None:
+    """Path from a ``--- ``/``+++ `` line (timestamps after a tab are dropped)."""
+    value = raw[4:] if raw.startswith(("--- ", "+++ ")) else raw
+    value = value.split("\t", 1)[0].strip()
+    value = _unquote_git_path(value)
+    if value == "/dev/null":
+        return None
+    return _strip_patch_prefix(value)
+
+
+def _looks_like_patch_header(old_line: str, new_line: str) -> bool:
+    """Disambiguate a file header from a removed/added ``---``/``+++`` pair."""
+    old = _unquote_git_path(old_line[4:].split("\t", 1)[0].strip())
+    new = _unquote_git_path(new_line[4:].split("\t", 1)[0].strip())
+    if old == "/dev/null" or new == "/dev/null":
+        return True
+    return old.startswith("a/") and new.startswith("b/")
+
+
+def _parse_patch_stats(patch: str) -> dict[str, Any]:
+    """Parse per-file ``+``/``-`` counts from a unified git diff.
+
+    Works with both ``git diff`` output (``diff --git`` headers) and a plain
+    unified diff.  Binary and rename-only entries count as files with zero
+    changed lines; hunk content that happens to start with ``---``/``+++`` is
+    not mistaken for a file header.
+    """
+    entries: list[dict[str, Any]] = []
+    current: dict[str, Any] | None = None
+    in_hunk = False
+    lines = patch.splitlines()
+
+    def new_entry() -> dict[str, Any]:
+        entry: dict[str, Any] = {
+            "path": "",
+            "additions": 0,
+            "deletions": 0,
+            "_from_git": False,
+            "_seen_hunk": False,
+        }
+        entries.append(entry)
+        return entry
+
+    for index, line in enumerate(lines):
+        if line.startswith("diff --git "):
+            old, new = _patch_diff_git_paths(line)
+            current = new_entry()
+            current["path"] = new or old or ""
+            current["_from_git"] = True
+            in_hunk = False
+            continue
+
+        if line.startswith("@@"):
+            in_hunk = True
+            if current is not None:
+                current["_seen_hunk"] = True
+            continue
+
+        has_header_pair = (
+            line.startswith("--- ")
+            and index + 1 < len(lines)
+            and lines[index + 1].startswith("+++ ")
+        )
+        if has_header_pair:
+            if in_hunk and not _looks_like_patch_header(
+                line, lines[index + 1]
+            ):
+                # A removed line whose content is ``-- ...`` followed by an
+                # added line whose content is ``++ ...``.
+                if current is not None:
+                    current["deletions"] += 1
+                continue
+
+            old_path = _patch_header_path(line)
+            new_path = _patch_header_path(lines[index + 1])
+            if current is None or (
+                not current["_from_git"] and current["_seen_hunk"]
+            ):
+                current = new_entry()
+            if new_path:
+                current["path"] = new_path
+            elif old_path:
+                current["path"] = old_path
+            if current["path"]:
+                current["path"] = _strip_patch_prefix(current["path"])
+            in_hunk = False
+            continue
+
+        if in_hunk and current is not None:
+            if line.startswith("+"):
+                current["additions"] += 1
+            elif line.startswith("-"):
+                current["deletions"] += 1
+            continue
+
+        if current is not None and line.startswith("rename to "):
+            renamed = _unquote_git_path(line[len("rename to ") :])
+            if renamed:
+                current["path"] = _strip_patch_prefix(renamed)
+
+    stat = [
+        {
+            "path": entry["path"] or "unknown",
+            "additions": entry["additions"],
+            "deletions": entry["deletions"],
+        }
+        for entry in entries
+    ]
+    return {
+        "files": len(stat),
+        "additions": sum(entry["additions"] for entry in stat),
+        "deletions": sum(entry["deletions"] for entry in stat),
+        "stat": stat,
+    }
+
+
+def _colorize_patch(patch: str) -> str:
+    """Color diff headers, hunks, additions and deletions (TTY only)."""
+    rendered: list[str] = []
+    for line in patch.splitlines(keepends=True):
+        color = ""
+        if line.startswith("diff --git "):
+            color = _PATCH_HEADER
+        elif line.startswith("@@"):
+            color = _PATCH_HUNK
+        elif line.startswith(("+++ ", "--- ")):
+            color = _PATCH_HEADER
+        elif line.startswith("+"):
+            color = _PATCH_GREEN
+        elif line.startswith("-"):
+            color = _PATCH_RED
+        if not color:
+            rendered.append(line)
+            continue
+        newline = "\n" if line.endswith("\n") else ""
+        body = line[:-1] if newline else line
+        rendered.append(f"{color}{body}{_RESET}{newline}")
+    return "".join(rendered)
+
+
+def _patch_summary_line(stats: dict[str, Any]) -> str:
+    files = int(stats["files"])
+    additions = int(stats["additions"])
+    deletions = int(stats["deletions"])
+    return (
+        f"{files} file{'s' if files != 1 else ''} changed, "
+        f"{additions} insertion{'s' if additions != 1 else ''}(+), "
+        f"{deletions} deletion{'s' if deletions != 1 else ''}(-)"
+    )
+
+
+def _print_patch_stat(stats: dict[str, Any]) -> None:
+    available = max(20, _terminal_width())
+    for entry in stats["stat"]:
+        suffix = f"  +{entry['additions']} -{entry['deletions']}"
+        path = _truncate_cell(entry["path"], max(1, available - len(suffix)))
+        print(f"{path}{suffix}")
+    print(_patch_summary_line(stats))
+
+
+def _patch_error_message(run_id: str, exc: DarkmageError) -> str:
+    """Map backend patch statuses to actionable, token-free CLI messages."""
+    status = exc.status_code
+    raw = str(exc)
+    if status is None:
+        match = re.match(r"(\d{3})\b", raw)
+        if match:
+            status = int(match.group(1))
+    lower = raw.lower()
+    if status == 402:
+        return (
+            "Patch downloads require an active subscription (HTTP 402). "
+            "Upgrade your plan and retry."
+        )
+    if status == 404:
+        return f"Run {run_id} not found (HTTP 404)."
+    if status == 409:
+        if "wait for the run" in lower or "finish" in lower:
+            return (
+                f"Run {run_id} is not finished yet (HTTP 409). "
+                "Wait for it to complete, then retry."
+            )
+        if "no available checkpoint" in lower or "no files" in lower:
+            return (
+                f"No patch is available for run {run_id} (HTTP 409): "
+                "it changed no files or its checkpoint was replaced."
+            )
+        if "start the workspace" in lower:
+            return (
+                f"The workspace for run {run_id} is not running (HTTP 409). "
+                "Start it, then retry."
+            )
+        return f"Run {run_id} cannot be downloaded yet (HTTP 409)."
+    if status == 413:
+        return (
+            "Patch is too large (HTTP 413; 16 MiB server limit). "
+            f"Review the run diff with 'darkmage run review {run_id}' or "
+            "inspect fewer changes; --stat/--output use the same endpoint."
+        )
+    return raw
+
+
+def _patch_output_path(args: argparse.Namespace) -> Path:
+    return Path(args.output).expanduser()
+
+
+def cmd_run_patch(args: argparse.Namespace, client: DarkmageClient) -> int:
+    run_id = args.run_id
+    output_path: Path | None = (
+        _patch_output_path(args) if getattr(args, "output", None) else None
+    )
+    if output_path is not None and output_path.exists() and not getattr(
+        args, "force", False
+    ):
+        message = (
+            f"Refusing to overwrite {output_path}; pass --force to replace it."
+        )
+        if getattr(args, "json", False):
+            raise DarkmageError(message)
+        print(f"Error: {message}", file=sys.stderr)
+        return 1
+
+    try:
+        patch = client.run_patch(run_id)
+    except DarkmageError as exc:
+        message = _patch_error_message(run_id, exc)
+        if getattr(args, "json", False):
+            raise DarkmageError(
+                message,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            ) from exc
+        print(f"Error: {message}", file=sys.stderr)
+        return 1
+
+    raw = getattr(patch, "raw", None)
+    if isinstance(patch, (bytes, bytearray)):
+        raw = bytes(patch)
+        patch = raw.decode("utf-8", errors="replace")
+    if not isinstance(raw, (bytes, bytearray)):
+        raw = patch.encode("utf-8")
+    raw = bytes(raw)
+    stats = _parse_patch_stats(patch)
+    empty = not patch.strip()
+
+    if output_path is not None:
+        try:
+            output_path.parent.mkdir(parents=True, exist_ok=True)
+            output_path.write_bytes(raw)
+        except OSError as exc:
+            message = f"Cannot write patch to {output_path}: {exc}"
+            if getattr(args, "json", False):
+                raise DarkmageError(message) from exc
+            print(f"Error: {message}", file=sys.stderr)
+            return 1
+
+    if getattr(args, "json", False):
+        print_json(
+            {
+                "run_id": run_id,
+                "files": stats["files"],
+                "additions": stats["additions"],
+                "deletions": stats["deletions"],
+                "stat": stats["stat"],
+                "patch": patch,
+            }
+        )
+        return 0
+
+    if output_path is not None:
+        print(f"Saved patch to {output_path} ({len(raw)} bytes)")
+        if empty:
+            print(f"No changes: run {run_id} has an empty patch.")
+            return 0
+
+    if getattr(args, "stat", False):
+        if empty:
+            print(f"No changes: run {run_id} has an empty patch.")
+        else:
+            _print_patch_stat(stats)
+        return 0
+
+    if output_path is not None:
+        return 0
+
+    if empty:
+        print(f"No changes: run {run_id} has an empty patch.")
+        return 0
+
+    if sys.stdout.isatty() and not getattr(args, "no_color", False):
+        sys.stdout.write(_colorize_patch(patch))
+        if not patch.endswith("\n"):
+            sys.stdout.write("\n")
+    else:
+        # Preserve the raw patch text for piping: no extra headers/newlines.
+        # If the response was not valid UTF-8, write the original bytes when
+        # the stream supports it instead of the replacement-decoded text.
+        if raw != patch.encode("utf-8"):
+            buffer = getattr(sys.stdout, "buffer", None)
+            if buffer is not None:
+                buffer.write(raw)
+                buffer.flush()
+                return 0
+        sys.stdout.write(patch)
+    return 0
+
+
 def cmd_run_list(args: argparse.Namespace, client: DarkmageClient) -> None:
     runs = client.run_list(args.workspace_id)
     if args.json or not sys.stdout.isatty():
@@ -2804,7 +3156,7 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create list new all runs files read' -- "$cur") )
             ;;
         run)
-            COMPREPLY=( $(compgen -W 'create get message answer context revert review stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create get message answer context revert review patch stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
             ;;
         approvals)
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit' -- "$cur") )
@@ -2901,6 +3253,13 @@ _darkmage() {
             ;;
         args)
             case $words[2] in
+                run)
+                    _arguments '1:subcommand:(create get message answer context revert review patch stop list events)' \\
+                        '--stat[Show per-file +/- summary]' \\
+                        '--output[Write exact patch bytes]:file:_files' \\
+                        '--no-color[Disable diff colors]' \\
+                        '--force[Overwrite an existing output file]'
+                    ;;
                 exec)
                     _arguments '--json[Output JSON]' \\
                         '--session[Session id]:session id:' \\
@@ -2977,6 +3336,10 @@ complete -c darkmage -l plan-only -d 'Plan only' -n '__fish_seen_subcommand_from
 # run / approvals options
 complete -c darkmage -l follow -d 'Follow the run' -n '__fish_seen_subcommand_from run'
 complete -c darkmage -l no-follow -d 'Create the run and exit' -n '__fish_seen_subcommand_from run'
+complete -c darkmage -l stat -d 'Show per-file +/- summary' -n '__fish_seen_subcommand_from patch'
+complete -c darkmage -l output -s o -r -d 'Write exact patch bytes' -n '__fish_seen_subcommand_from patch'
+complete -c darkmage -l no-color -d 'Disable diff colors' -n '__fish_seen_subcommand_from patch'
+complete -c darkmage -l force -d 'Overwrite an existing output file' -n '__fish_seen_subcommand_from patch'
 complete -c darkmage -l scope -x -a 'call turn' -d 'Approval scope' -n '__fish_seen_subcommand_from approvals'
 complete -c darkmage -l limit -x -d 'Maximum approvals' -n '__fish_seen_subcommand_from approvals'
 complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
@@ -2987,7 +3350,7 @@ complete -c darkmage -f -a 'create list get update start stop delete apk godot b
 complete -c darkmage -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
 complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' -n '__fish_seen_subcommand sync'
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
-complete -c darkmage -f -a 'create get message answer context revert review stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c darkmage -f -a 'create get message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
@@ -3407,6 +3770,47 @@ def build_parser() -> argparse.ArgumentParser:
     p = runs_sub.add_parser("review", help="Review a finished task's diff")
     p.add_argument("run_id")
     p.set_defaults(func=cmd_run_review)
+
+    p = runs_sub.add_parser(
+        "patch",
+        help="Download a finished run's unified git patch",
+        description=(
+            "Download the changes since a finished run's checkpoint as a "
+            "unified git patch. Colors are used only on a TTY; --no-color "
+            "disables them. --stat prints per-file +/- counts, --output "
+            "writes the exact bytes, --json returns a structured envelope."
+        ),
+    )
+    p.add_argument("run_id")
+    p.add_argument(
+        "--stat",
+        action="store_true",
+        help="Show file/additions/deletions summary instead of the patch",
+    )
+    p.add_argument(
+        "--output",
+        "-o",
+        default=None,
+        metavar="PATH",
+        help="Write the exact patch bytes to PATH",
+    )
+    p.add_argument(
+        "--no-color",
+        action="store_true",
+        help="Disable diff colors even when stdout is a TTY",
+    )
+    p.add_argument(
+        "--force",
+        action="store_true",
+        help="Overwrite an existing --output file",
+    )
+    p.add_argument(
+        "--json",
+        action="store_true",
+        default=argparse.SUPPRESS,
+        help="Structured JSON output (accepted before or after the subcommand)",
+    )
+    p.set_defaults(func=cmd_run_patch)
 
     p = runs_sub.add_parser("stop", help="Stop a run")
     p.add_argument("run_id")

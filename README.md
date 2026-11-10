@@ -92,6 +92,7 @@ darkmage run answer <run_id> <question_id> "yes"      # answer an ask_user quest
 darkmage run context <run_id>                         # show context token usage
 darkmage run revert <run_id>
 darkmage run review <run_id>
+darkmage run patch <run_id> [--stat] [--output PATH] [--no-color] [--force] [--json]
 darkmage run stop <run_id>
 darkmage run events <run_id> [--last-event-id N] [--pretty]
 
@@ -146,6 +147,19 @@ darkmage chat "Hello" [--system "You are helpful"] [--model ...] [--temperature 
 darkmage health
 darkmage ready
 ```
+
+### Downloading a run patch
+
+`darkmage run patch <run_id>` prints the unified diff for a finished run. Colors are used only on a TTY; `--no-color` disables them, and non-TTY output is byte-for-byte patch text for piping.
+
+```bash
+darkmage run patch <run_id> > changes.patch
+darkmage run patch <run_id> --output changes.patch   # refuses to overwrite; add --force
+darkmage run patch <run_id> --stat                  # files, +/-, per-file summary
+darkmage run patch <run_id> --json                  # run_id/files/additions/deletions/stat/patch
+```
+
+The endpoint is subscription-gated (HTTP 402); a missing/foreign run is 404, an unfinished run or missing checkpoint is 409, and patches above the server's 16 MiB limit are 413. Errors print a clear message to stderr and exit non-zero without exposing the token.
 
 ## Notes
 
