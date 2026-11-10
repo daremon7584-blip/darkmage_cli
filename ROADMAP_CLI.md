@@ -75,6 +75,13 @@
 - `--json` для `run queue` — сырой объект API, для `run get` — прежний объект; 404/403 без traceback и утечки токена
 - bash/zsh/fish completion, help, README; тесты queue text/JSON, not queued, expired/null ETA, trial wording, run get/list, 404, token leak
 
+**Run verification (10.11.2026):**
+- `run verification <run_id> [--json]` — читает SSE-поток run, берёт последний `run.completed`/`run.failed` и показывает аддитивный объект `verification` воркера
+- Человеческий вывод: статус (`Проверено`/`Не проверено`/`Требуется проверка`/`Не запускалась`), команда, exit code, до 8 строк ошибок, диагностика (`kind`, counts) и пояснение для `verification_required`/partial
+- `--json` — `run_id`, `status`, `finish_reason`, `verification`, `report`; run без терминального события — понятная ошибка и exit 2; 404/403 без traceback и утечки токена
+- bash/zsh/fish completion, help, README; тесты verified/unverified/verification_required/partial, diagnostics failures/counts, no terminal event, 404, JSON и token safety
+- 20 тестов; полный CLI suite — 347 тестов
+
 **Admin skills gate (10.11.2026):**
 - `admin skills list [--status ...] [--json]` — список сканов, таблица в 80 колонок (id/name/status/severity/risk/digest prefix/date)
 - `admin skills show <scan_id> [--json]` — детали, top-5 findings/issues и подсказки approve/reject
@@ -91,9 +98,9 @@
 - `admin mcp call <tool> --args JSON [--json]` — `POST /admin/mcp/call` для read-only allowlist; malformed/missing JSON отказ локально, tool error → exit 1
 - JSON-конверты `schema_version/server/...` для всех команд; 404 не-админа → `Admin only or not found` (exit 2), 409/422 — понятные ошибки без traceback и токена
 - bash/zsh/fish completion и help; backend не отдаёт last_seen, поэтому колонка показывает `-` (совместимо с будущим полем)
-- 52 теста admin MCP; полный CLI suite — 298 тестов
+- 52 теста admin MCP; полный CLI suite — 347 тестов
 
-Все 298 тестов проходят.
+Все 347 тестов проходят.
 
 ---
 

@@ -1751,6 +1751,253 @@ def cmd_run_events(args: argparse.Namespace, client: DarkmageClient) -> int:
     return 0
 
 
+_VERIFICATION_STATUS_LABELS = {
+    "verified": "Проверено",
+    "unverified": "Не проверено",
+    "verification_required": "Требуется проверка",
+    "not_run": "Не запускалась",
+}
+_VERIFICATION_EVENTS = frozenset({"run.completed", "run.failed"})
+_VERIFICATION_MAX_FAILURES = 8
+_VERIFICATION_REPORT_CHARS = 2_000
+
+
+def _exception_status_code(exc: DarkmageError) -> int | None:
+    """HTTP status from a DarkmageError, including older string-only errors."""
+    if exc.status_code is not None:
+        return exc.status_code
+    match = re.match(r"(\d{3})\b", str(exc))
+    return int(match.group(1)) if match else None
+
+
+def _verification_error_message(run_id: str, exc: DarkmageError) -> str:
+    """Map verification lookup failures to clear, token-free messages."""
+    status = _exception_status_code(exc)
+    if status == 404:
+        return (
+            f"Run {run_id} not found (HTTP 404). Check the id, or wait a "
+            "moment if the run was just created."
+        )
+    if status == 403:
+        return (
+            f"Access denied for run {run_id} (HTTP 403). Verification is only "
+            "available for runs you own."
+        )
+    return str(exc)
+
+
+def _find_verification_event(client: DarkmageClient, run_id: str) -> dict | None:
+    """Return the last run.completed/run.failed event, or None.
+
+    The parsed SSE helper replays a finished run's events and stops at the
+    terminal event, so this does not need a separate run lookup.
+    """
+    found: dict | None = None
+    for event in client.run_events_parsed(run_id):
+        if isinstance(event, dict) and event.get("event") in _VERIFICATION_EVENTS:
+            found = event
+    return found
+
+
+def _verification_status(finish_reason: str | None, verification: dict) -> str:
+    """Normalize terminal evidence into the four CLI verification states."""
+    explicit = verification.get("status")
+    if finish_reason == "verification_required" or explicit == "verification_required":
+        return "verification_required"
+    if explicit == "verified":
+        return "verified"
+    if explicit == "not_run":
+        return "not_run"
+    if (
+        verification.get("command")
+        or verification.get("exit_code") is not None
+        or verification.get("failures")
+    ):
+        return "unverified"
+    return "not_run"
+
+
+def _verification_failure_lines(verification: dict) -> list[str]:
+    """Top failure lines, falling back to parsed diagnostics entries."""
+    raw = verification.get("failures")
+    lines = [
+        str(item).strip()
+        for item in (raw if isinstance(raw, list) else [])
+        if str(item).strip()
+    ]
+    if not lines:
+        diagnostics = verification.get("diagnostics")
+        parsed = diagnostics.get("failures") if isinstance(diagnostics, dict) else None
+        for item in parsed if isinstance(parsed, list) else []:
+            if not isinstance(item, dict):
+                continue
+            path = str(item.get("path") or "?")
+            line = item.get("line")
+            location = f"{path}:{line}" if isinstance(line, int) else path
+            message = str(item.get("message") or "").strip()
+            lines.append(f"{location}: {message}".rstrip(": "))
+    return lines[:_VERIFICATION_MAX_FAILURES]
+
+
+def _diagnostics_summary(diagnostics: dict) -> str:
+    """``pytest: failed (counts: diagnostics=12, omitted=10)``, bounded."""
+    kind = str(diagnostics.get("kind") or "check")
+    status = str(diagnostics.get("status") or "unknown")
+    parts = [f"{kind}: {status}"]
+    counts = diagnostics.get("counts")
+    if isinstance(counts, dict) and counts:
+        rendered = ", ".join(
+            f"{key}={value}" for key, value in counts.items() if isinstance(value, int)
+        )
+        if rendered:
+            parts.append(f"counts: {rendered}")
+    else:
+        failures = diagnostics.get("failures")
+        if isinstance(failures, list):
+            parts.append(f"{len(failures)} diagnostics")
+    return "(" + "; ".join(parts) + ")" if len(parts) > 1 else "(" + parts[0] + ")"
+
+
+def _verification_payload(run_id: str, event: dict) -> dict[str, Any]:
+    data = event.get("data")
+    data = data if isinstance(data, dict) else {}
+    raw_verification = data.get("verification")
+    verification = (
+        dict(raw_verification) if isinstance(raw_verification, dict) else {}
+    )
+    finish_reason = data.get("finish_reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = data.get("reason")
+    if not isinstance(finish_reason, str) or not finish_reason:
+        finish_reason = str(event.get("event") or "unknown")
+    report = data.get("report") if isinstance(data.get("report"), str) else None
+    return {
+        "run_id": run_id,
+        "status": _verification_status(finish_reason, verification),
+        "finish_reason": finish_reason,
+        "verification": verification,
+        "report": report,
+    }
+
+
+def _print_verification_failures(lines: list[str]) -> None:
+    if not lines:
+        print("Ошибки:      —")
+        return
+    print(
+        "Ошибки:      "
+        f"{len(lines)}" + (" (первые 8)" if len(lines) >= _VERIFICATION_MAX_FAILURES else "")
+    )
+    width = max(20, _terminal_width())
+    for line in lines[:_VERIFICATION_MAX_FAILURES]:
+        chunks = textwrap.wrap(
+            f"- {line}",
+            width=width,
+            break_long_words=True,
+            break_on_hyphens=False,
+            replace_whitespace=True,
+        ) or ["-"]
+        print("  " + chunks[0])
+        for chunk in chunks[1:]:
+            print("    " + chunk)
+
+
+def cmd_run_verification(args: argparse.Namespace, client: DarkmageClient) -> int:
+    run_id = args.run_id
+    try:
+        terminal = _find_verification_event(client, run_id)
+    except DarkmageError as exc:
+        message = _verification_error_message(run_id, exc)
+        if getattr(args, "json", False):
+            raise DarkmageError(
+                message,
+                status_code=exc.status_code,
+                retryable=exc.retryable,
+            ) from exc
+        print(f"Error: {message}", file=sys.stderr)
+        return 1
+
+    if terminal is None:
+        message = (
+            f"Run {run_id} has no terminal run.completed/run.failed event. "
+            "It may still be running, have been cancelled, or its events may "
+            f"have expired; inspect it with 'darkmage run events {run_id} --pretty'."
+        )
+        if getattr(args, "json", False):
+            print_json(
+                {
+                    "schema_version": 1,
+                    "error": {
+                        "code": "no_terminal_event",
+                        "message": message,
+                        "status_code": None,
+                        "retryable": False,
+                    },
+                }
+            )
+        else:
+            print(f"Error: {message}", file=sys.stderr)
+        return 2
+
+    payload = _verification_payload(run_id, terminal)
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(payload)
+        return 0
+
+    verification = payload["verification"]
+    event_type = str(terminal.get("event") or "")
+    finish_reason = payload["finish_reason"]
+    detail = (
+        f" (reason={finish_reason})"
+        if event_type == "run.failed"
+        else f" (finish_reason={finish_reason})"
+    )
+    print(f"Run:         {run_id}")
+    print(f"Проверка:    {_VERIFICATION_STATUS_LABELS[payload['status']]}")
+    print(f"Событие:     {event_type}{detail}")
+    command = verification.get("command")
+    print(f"Команда:     {command or '—'}")
+    exit_code = verification.get("exit_code")
+    print(f"Код выхода:  {exit_code if exit_code is not None else '—'}")
+    summary = verification.get("summary")
+    if summary:
+        _print_wrapped_field("Сводка", summary)
+    diagnostics = verification.get("diagnostics")
+    if isinstance(diagnostics, dict) and diagnostics:
+        _print_wrapped_field("Диагностика", _diagnostics_summary(diagnostics))
+    else:
+        print("Диагностика: —")
+    _print_verification_failures(_verification_failure_lines(verification))
+
+    if payload["status"] == "verification_required":
+        print(
+            "Пояснение:   Run завершён, но изменения не проверены "
+            "(finish_reason=verification_required). Запустите проверку до слияния."
+        )
+    elif event_type == "run.failed":
+        if payload["status"] == "not_run":
+            print("Пояснение:   Run завершился ошибкой; проверка не запускалась.")
+        else:
+            print("Пояснение:   Run завершился ошибкой; доказательств проверки нет.")
+    elif finish_reason in {"partial", "tool_loop_stopped"}:
+        print(
+            f"Пояснение:   Run завершён частично (finish_reason={finish_reason}); "
+            "проверка могла не покрыть все изменения."
+        )
+    elif payload["status"] == "not_run":
+        print(
+            "Пояснение:   В терминальном событии нет команды проверки — "
+            "run не запускал проверку."
+        )
+
+    report = payload["report"]
+    if report:
+        if len(report) > _VERIFICATION_REPORT_CHARS:
+            report = report[:_VERIFICATION_REPORT_CHARS].rstrip() + " …"
+        _print_wrapped_field("Отчёт", report)
+    return 0
+
+
 def cmd_approval_list(args: argparse.Namespace, client: DarkmageClient) -> int:
     approvals = client.approval_list(
         getattr(args, "limit", 50),
@@ -4302,7 +4549,7 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'create list new all runs files read' -- "$cur") )
             ;;
         run)
-            COMPREPLY=( $(compgen -W 'create get queue message answer context revert review patch stop list events --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'create get queue message answer context revert review patch stop list events verification --json --follow --no-follow --model --plan-only --image --last-event-id --pretty --stat --output --no-color --force' -- "$cur") )
             ;;
         approvals)
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
@@ -4416,7 +4663,7 @@ _darkmage() {
         args)
             case $words[2] in
                 run)
-                    _arguments '1:subcommand:(create get queue message answer context revert review patch stop list events)' \\
+                    _arguments '1:subcommand:(create get queue message answer context revert review patch stop list events verification)' \\
                         '--stat[Show per-file +/- summary]' \\
                         '--output[Write exact patch bytes]:file:_files' \\
                         '--no-color[Disable diff colors]' \\
@@ -4549,7 +4796,7 @@ complete -c darkmage -f -a 'create list get update start stop delete apk godot b
 complete -c darkmage -f -a 'list read edit search download upload cp mv rm export status tree sync' -d 'files subcommands' -n '__fish_seen_subcommand files'
 complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' -n '__fish_seen_subcommand sync'
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
-complete -c darkmage -f -a 'create get queue message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
+complete -c darkmage -f -a 'create get queue message answer context revert review patch stop list events verification' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
 complete -c darkmage -f -a 'status skills mcp' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
 complete -c darkmage -f -a 'list show gate scan approve reject' -d 'skills subcommands' -n '__fish_seen_subcommand skills'
@@ -4963,6 +5210,22 @@ def build_parser() -> argparse.ArgumentParser:
     )
     p.add_argument("run_id")
     p.set_defaults(func=cmd_run_queue)
+
+    p = runs_sub.add_parser(
+        "verification",
+        help="Show verification evidence from a finished run",
+        description=(
+            "Read the run's event stream and print the verification evidence "
+            "from the last run.completed/run.failed event: status, check "
+            "command, exit code, failure lines and parsed diagnostics. "
+            "Statuses: verified (Проверено), unverified (Не проверено), "
+            "verification_required (Требуется проверка) and not_run "
+            "(Не запускалась). --json returns run_id, status, finish_reason, "
+            "verification and report. A run without a terminal event exits 2."
+        ),
+    )
+    p.add_argument("run_id")
+    p.set_defaults(func=cmd_run_verification)
 
     p = runs_sub.add_parser("message", help="Send a message to a running task")
     p.add_argument("run_id")

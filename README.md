@@ -87,6 +87,7 @@ darkmage session read <session_id> <path>      # прочитать файл с�
 darkmage run create <session_id> --prompt "Explain this code" [--model ...] [--plan-only] [--thorough] [--image file.png]
 darkmage run get <run_id>
 darkmage run queue <run_id> [--json]                 # queue place, ETA and expiry for a queued run
+darkmage run verification <run_id> [--json]          # verification evidence from the terminal event
 darkmage run list <workspace_id>                          # все ran в рабочей зоне (саб-агенты)
 darkmage run message <run_id> "additional context"   # or read from stdin with '-'
 darkmage run answer <run_id> <question_id> "yes"      # answer an ask_user question
@@ -184,6 +185,17 @@ darkmage run queue <run_id> --json   # raw GET /runs/{run_id} object
 ```
 
 A run that is not queued gets a friendly `Not queued` message. A queued run whose deadline expired (or whose queue metadata is otherwise gone) reports that queue information is not available instead of a stale position. `darkmage run get <run_id>` adds a compact `Queue:` line when metadata is present, and `darkmage run list <workspace_id>` shows an `Очередь` column only when at least one listed run is queued. Missing or foreign runs return a clear 404 and never print the token.
+
+### Verification evidence
+
+`darkmage run verification <run_id>` reads the run's event stream, takes the last `run.completed`/`run.failed` event and prints the verification evidence the worker recorded:
+
+```bash
+darkmage run verification <run_id>
+darkmage run verification <run_id> --json   # run_id/status/finish_reason/verification/report
+```
+
+The human summary shows the status (`Проверено`, `Не проверено`, `Требуется проверка`, `Не запускалась`), the check command and exit code, up to eight failure lines, parsed diagnostics (`kind` and counts) and a short explanation for `verification_required` or partial runs. `--json` returns the raw `verification` object plus the run id, normalized status, finish reason and partial/failure report. A run without a terminal `run.completed`/`run.failed` event exits 2 with a clear message; missing/foreign runs return a clear 404/403 without a traceback or token.
 
 ### Admin skill gate
 
