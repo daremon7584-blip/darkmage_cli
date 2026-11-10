@@ -115,6 +115,12 @@ darkmage admin skills gate <digest> [--json]   # allowed=true только дл�
 darkmage admin skills scan --name NAME [--version V] [--source URL] --report FILE [--json]
 darkmage admin skills approve <scan_id> [--note TEXT] [--allow-high-risk] [--json]
 darkmage admin skills reject <scan_id> [--note TEXT] [--json]
+
+darkmage admin mcp list [--json]                     # tools, current/approved schema hashes, status
+darkmage admin mcp show <tool> [--json]              # bounded schema + approval metadata
+darkmage admin mcp approve <tool> [--hash SHA256] [--yes] [--json]
+darkmage admin mcp call <tool> --args '{"key":"value"}' [--json]  # read-only tools only
+
 darkmage term <workspace_id>                   # безопасный relay к удалённому PTY (без локального shell)
 
 darkmage git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
@@ -187,6 +193,25 @@ darkmage admin skills reject <scan_id> --note "untrusted publisher"
 - The list table fits 80 columns; `show` prints at most five findings and full approve/reject hints, wrapping long commands with shell line continuations.
 - Admin-only access is enforced by the server. Non-admins get a 404, which the CLI renders as `Admin only or not found: ...` (never a traceback or token). API 409/422 errors are printed clearly with exit 2.
 - `--json` returns the raw API object(s): a list for `list`, a scan detail for `show`/`scan`/`approve`/`reject`, and a gate decision for `gate`.
+
+### Admin MCP gateway
+
+`darkmage admin mcp` wraps the admin-only gateway (`/admin/mcp`). It lists the configured MCP server's tools, shows their schema, and approves the exact schema hash the server currently serves. Approval never executes the tool.
+
+```bash
+darkmage admin mcp list
+darkmage admin mcp show github.search
+darkmage admin mcp approve github.search --hash <64-hex-current-hash>
+darkmage admin mcp approve github.search --yes   # fetch the hash, print it, approve that exact hash
+darkmage admin mcp call github.search --args '{"query":"repo:acme/app bug"}'
+```
+
+- `list` prints tool name, schema hash prefix, approval status (`approved` / `changed` / `new`), approved hash prefix and last seen in a table capped at 80 columns. The current backend response does not expose a last-seen timestamp, so that column renders `-` until the API adds one.
+- `show` fetches the current tool list, prints approval metadata, the full current/approved hashes when they differ, and a bounded JSON schema (the full parameters are available with `--json`).
+- `approve` validates the hash locally as exactly 64 lowercase hex characters. With `--hash`, the CLI first fetches the tool list and refuses locally (exit 2, no POST) if the hash is not the exact current schema hash; the error shows provided, current and approved hashes. Without `--hash`, `--yes` is mandatory: the CLI prints the current hash and requires the explicit flag, then approves that fetched hash. A changed schema is therefore never approved silently.
+- `call` accepts a JSON object for `--args` and only works for tools in the server's `MCP_READ_ONLY_TOOLS` allowlist. A tool-level failure returns exit 1.
+- Non-admin requests (server 404) render as `Admin only or not found` with exit 2. 409 (schema changed) and 422 (invalid request) errors are clear, token-free and exit 2.
+- `--json` prints an envelope with `schema_version`, `server` and the command payload (`tools`, `tool`, `approved`, or `ok`/`result`/`error`). Errors use the shared `{"schema_version":1,"error":{...}}` envelope.
 
 ## Notes
 

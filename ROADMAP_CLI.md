@@ -77,7 +77,16 @@
 - 404 для не-админа рендерится как `Admin only or not found`, 409/422 — понятные ошибки без traceback и токена; bash/zsh/fish completion и help
 - 37 тестов; весь CLI suite — 246 тестов
 
-Все 246 тестов проходят.
+**Admin MCP gateway (10.11.2026):**
+- `admin mcp list [--json]` — `GET /admin/mcp/tools`; таблица tool / префикс schema hash / approval status / префикс approved hash / last seen, не шире 80 колонок
+- `admin mcp show <tool> [--json]` — детали из списка: approval metadata, оба хеша при расхождении, bounded JSON schema и подсказка approve
+- `admin mcp approve <tool> [--hash SHA256] [--yes] [--json]` — hash проверяется локально (64 lowercase hex); с `--hash` CLI сверяет его с текущим и отказывает при mismatch (exit 2, без POST), без `--hash` требует `--yes`, печатает текущий hash и одобряет именно его
+- `admin mcp call <tool> --args JSON [--json]` — `POST /admin/mcp/call` для read-only allowlist; malformed/missing JSON отказ локально, tool error → exit 1
+- JSON-конверты `schema_version/server/...` для всех команд; 404 не-админа → `Admin only or not found` (exit 2), 409/422 — понятные ошибки без traceback и токена
+- bash/zsh/fish completion и help; backend не отдаёт last_seen, поэтому колонка показывает `-` (совместимо с будущим полем)
+- 52 теста admin MCP; полный CLI suite — 298 тестов
+
+Все 298 тестов проходят.
 
 ---
 
@@ -271,6 +280,7 @@ darkmage process start|output|stop
 darkmage payment create|list
 darkmage admin status
 darkmage admin skills list|show|gate|scan|approve|reject ...
+darkmage admin mcp list|show|approve|call <tool> [--hash SHA256] [--yes] [--args JSON]
 darkmage term <workspace_id>
 darkmage tui <workspace_id> [--run-id <id>]
 darkmage git clone|commit|push|pr <ws> ...

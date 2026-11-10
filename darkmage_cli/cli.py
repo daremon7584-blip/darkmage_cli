@@ -2622,6 +2622,519 @@ def cmd_admin_skills_reject(args: argparse.Namespace, client: DarkmageClient) ->
     return 0
 
 
+# ---------------------------------------------------------------------------
+# Admin MCP gateway (/admin/mcp)
+# ---------------------------------------------------------------------------
+
+_ADMIN_MCP_HASH_RE = re.compile(r"^[a-f0-9]{64}$")
+_ADMIN_MCP_SCHEMA_LIMIT = 4000
+_ADMIN_MCP_SCHEMA_LINES = 60
+_ADMIN_MCP_RESULT_LIMIT = 4000
+
+
+def _admin_mcp_local_error(
+    args: argparse.Namespace,
+    message: str,
+    *,
+    code: str = "invalid_request",
+    status_code: int | None = None,
+) -> int:
+    """Report a validation error before (or instead of) an unsafe API call."""
+    if getattr(args, "json", False):
+        print_json(
+            {
+                "schema_version": 1,
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "status_code": status_code,
+                    "retryable": False,
+                },
+            }
+        )
+    else:
+        print(f"Error: {message}", file=sys.stderr)
+    return 2
+
+
+def _admin_mcp_request(
+    args: argparse.Namespace,
+    call: Callable[[], Any],
+    *,
+    not_found: str,
+) -> tuple[Any, int | None]:
+    """Run one admin MCP call and normalize 404/409/422 errors.
+
+    ``require_admin`` answers non-admins with 404, so a raw "404 Not Found"
+    would hide the real reason. Error strings come from the response detail
+    only; request headers and the bearer token are never included.
+    """
+    try:
+        return call(), None
+    except DarkmageError as exc:
+        if exc.status_code == 404:
+            return None, _admin_mcp_local_error(
+                args,
+                f"Admin only or not found: {not_found}",
+                code="admin_only_or_not_found",
+                status_code=404,
+            )
+        if exc.status_code == 409:
+            message = str(exc)
+            if "schema" in message.lower():
+                message += (
+                    "; reload with 'darkmage admin mcp list' and approve the "
+                    "current hash"
+                )
+            return None, _admin_mcp_local_error(
+                args, message, code="conflict", status_code=409
+            )
+        if exc.status_code == 422:
+            return None, _admin_mcp_local_error(
+                args, str(exc), code="invalid_request", status_code=422
+            )
+        raise
+
+
+def _admin_mcp_tool_arg(args: argparse.Namespace) -> tuple[str | None, int | None]:
+    """Validate a tool name before it becomes part of a URL path."""
+    raw = getattr(args, "tool", "")
+    tool = str(raw) if raw is not None else ""
+    if (
+        not tool
+        or len(tool) > 128
+        or tool != tool.strip()
+        or "/" in tool
+        or "\\" in tool
+        or any(ord(char) < 32 for char in tool)
+    ):
+        return None, _admin_mcp_local_error(
+            args,
+            "Invalid tool name: expected 1-128 characters without slashes "
+            "or control characters",
+            code="invalid_tool",
+        )
+    return tool, None
+
+
+def _admin_mcp_tools(
+    args: argparse.Namespace, client: DarkmageClient
+) -> tuple[dict[str, Any] | None, int | None]:
+    """GET /admin/mcp/tools and validate the envelope shape."""
+    data, error = _admin_mcp_request(
+        args,
+        client.admin_mcp_tools,
+        not_found="the admin MCP tools endpoint",
+    )
+    if error is not None:
+        return None, error
+    if not isinstance(data, dict) or not isinstance(data.get("tools"), list):
+        return None, _admin_mcp_local_error(
+            args,
+            "Unexpected response from the MCP tools API",
+            code="invalid_response",
+        )
+    return data, None
+
+
+def _admin_mcp_find_tool(
+    tools: list[Any], name: str
+) -> dict[str, Any] | None:
+    for item in tools:
+        if isinstance(item, dict) and item.get("name") == name:
+            return item
+    return None
+
+
+def _admin_mcp_hashes(tool: dict[str, Any]) -> tuple[str | None, str | None]:
+    current = tool.get("schema_hash")
+    approved = tool.get("approved_schema_hash")
+    current = current if isinstance(current, str) and current else None
+    approved = approved if isinstance(approved, str) and approved else None
+    return current, approved
+
+
+def _admin_mcp_status(tool: dict[str, Any]) -> str:
+    status = tool.get("approval_status")
+    if isinstance(status, str) and status:
+        return status
+    current, approved = _admin_mcp_hashes(tool)
+    if current and current == approved:
+        return "approved"
+    return "changed" if approved else "new"
+
+
+def _admin_mcp_hash_prefix(value: Any) -> str:
+    return str(value)[:12] if isinstance(value, str) and value else "-"
+
+
+def _admin_mcp_last_seen(tool: dict[str, Any]) -> str:
+    # The current backend response has no last_seen field. Keep rendering it
+    # when a newer backend adds one instead of inventing a timestamp.
+    for key in ("last_seen", "last_seen_at"):
+        value = tool.get(key)
+        if isinstance(value, str) and value:
+            return _short_requested_at(value)
+    return "-"
+
+
+def _admin_mcp_yes_no(value: Any) -> str:
+    if value is True:
+        return "yes"
+    if value is False:
+        return "no"
+    return "unknown"
+
+
+def _bounded_text(value: Any, limit: int) -> str:
+    text = value if isinstance(value, str) else str(value)
+    if len(text) <= limit:
+        return text
+    return text[:limit]
+
+
+def _print_bounded_json_block(
+    value: Any,
+    *,
+    width: int,
+    limit: int,
+    max_lines: int,
+    note: str,
+) -> None:
+    """Print indented JSON, bounded by characters and lines."""
+    try:
+        text = json.dumps(value, indent=2, ensure_ascii=False, sort_keys=True)
+    except (TypeError, ValueError):  # pragma: no cover - API returns JSON
+        text = str(value)
+    lines = text.splitlines()
+    clipped = len(text) > limit or len(lines) > max_lines
+    used = 0
+    for index, line in enumerate(lines[:max_lines]):
+        remaining = limit - used
+        if remaining <= 0:
+            clipped = True
+            break
+        if len(line) > remaining:
+            line = line[:remaining]
+            clipped = True
+        print(_truncate_cell("  " + line, width))
+        used += len(line) + 1
+        if index == max_lines - 1 and len(lines) > max_lines:
+            clipped = True
+    if clipped:
+        print(_truncate_cell(f"  ... {note}", width))
+
+
+def _print_bounded_result(value: Any, *, width: int, limit: int) -> None:
+    text = value if isinstance(value, str) else json.dumps(value, ensure_ascii=False)
+    clipped = len(text) > limit
+    used = 0
+    for line in text[:limit].splitlines() or [""]:
+        remaining = limit - used
+        if remaining <= 0:
+            clipped = True
+            break
+        print(_truncate_cell("  " + line[:remaining], width))
+        used += len(line) + 1
+    if clipped:
+        print(
+            _truncate_cell(
+                "  ... result truncated by the CLI; use --json for the full result",
+                width,
+            )
+        )
+
+
+def _mcp_approve_hint(tool: dict[str, Any], *, width: int) -> None:
+    current, _approved = _admin_mcp_hashes(tool)
+    name = str(tool.get("name") or "")
+    if not name or _admin_mcp_status(tool) == "approved" or not current:
+        return
+    print()
+    print("Approve current hash:")
+    _print_skill_command(
+        f"darkmage admin mcp approve {name}",
+        ["--hash", current],
+        width=width,
+    )
+
+
+def cmd_admin_mcp_list(args: argparse.Namespace, client: DarkmageClient) -> int:
+    data, error = _admin_mcp_tools(args, client)
+    if error is not None:
+        return error
+    assert data is not None
+    tools = [item for item in data["tools"] if isinstance(item, dict)]
+    server = data.get("server") or "-"
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(
+            {
+                "schema_version": 1,
+                "server": server,
+                "count": len(tools),
+                "truncated": bool(data.get("truncated", False)),
+                "tools": tools,
+            }
+        )
+        return 0
+    if not tools:
+        print("No MCP tools.")
+        return 0
+    width = min(80, _terminal_width())
+    print(f"MCP tools on {server}:")
+    _print_table(
+        ["TOOL", "SCHEMA HASH", "APPROVAL", "APPROVED HASH", "LAST SEEN"],
+        [
+            [
+                tool.get("name") or "-",
+                _admin_mcp_hash_prefix(_admin_mcp_hashes(tool)[0]),
+                _admin_mcp_status(tool),
+                _admin_mcp_hash_prefix(_admin_mcp_hashes(tool)[1]),
+                _admin_mcp_last_seen(tool),
+            ]
+            for tool in tools
+        ],
+        width=width,
+        min_widths=[8, 10, 8, 10, 9],
+        drop_order=[4, 3],
+    )
+    if data.get("truncated"):
+        print(_truncate_cell("(tool list truncated by the server)", width))
+    return 0
+
+
+def cmd_admin_mcp_show(args: argparse.Namespace, client: DarkmageClient) -> int:
+    tool_name, error = _admin_mcp_tool_arg(args)
+    if error is not None:
+        return error
+    assert tool_name is not None
+    data, error = _admin_mcp_tools(args, client)
+    if error is not None:
+        return error
+    assert data is not None
+    tool = _admin_mcp_find_tool(data["tools"], tool_name)
+    if tool is None:
+        return _admin_mcp_local_error(
+            args,
+            f"Tool not found: {tool_name}. Run 'darkmage admin mcp list' to "
+            "see the tools the server currently offers.",
+            code="tool_not_found",
+        )
+    server = data.get("server") or "-"
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json({"schema_version": 1, "server": server, "tool": tool})
+        return 0
+
+    width = min(80, _terminal_width())
+    current, approved = _admin_mcp_hashes(tool)
+    print(f"MCP tool: {tool.get('name') or tool_name}")
+    _print_wrapped_field("Server", server, width=width)
+    _print_wrapped_field(
+        "Description",
+        _bounded_text(tool.get("description") or "-", 500),
+        width=width,
+    )
+    _print_wrapped_field("Read-only", _admin_mcp_yes_no(tool.get("read_only")), width=width)
+    _print_wrapped_field(
+        "Destructive", _admin_mcp_yes_no(tool.get("destructive")), width=width
+    )
+    _print_wrapped_field("Approval", _admin_mcp_status(tool), width=width)
+    _print_wrapped_field("Schema hash", current or "-", width=width)
+    _print_wrapped_field("Approved hash", approved or "-", width=width)
+    _print_wrapped_field("Last seen", _admin_mcp_last_seen(tool), width=width)
+    if current and approved and current != approved:
+        print(
+            _truncate_cell(
+                "Note: the schema changed since approval; both hashes are shown above.",
+                width,
+            )
+        )
+    print("Schema:")
+    _print_bounded_json_block(
+        tool.get("parameters") or {},
+        width=width,
+        limit=_ADMIN_MCP_SCHEMA_LIMIT,
+        max_lines=_ADMIN_MCP_SCHEMA_LINES,
+        note="schema truncated; use --json for the full parameters",
+    )
+    _mcp_approve_hint(tool, width=width)
+    return 0
+
+
+def cmd_admin_mcp_approve(args: argparse.Namespace, client: DarkmageClient) -> int:
+    tool_name, error = _admin_mcp_tool_arg(args)
+    if error is not None:
+        return error
+    assert tool_name is not None
+
+    provided = getattr(args, "hash", None)
+    if provided is not None:
+        provided = str(provided)
+        if not _ADMIN_MCP_HASH_RE.fullmatch(provided):
+            return _admin_mcp_local_error(
+                args,
+                f"Invalid hash {provided!r}: expected exactly 64 lowercase hex "
+                "characters (the current schema hash from 'darkmage admin mcp list')",
+                code="invalid_hash",
+            )
+
+    data, error = _admin_mcp_tools(args, client)
+    if error is not None:
+        return error
+    assert data is not None
+    tool = _admin_mcp_find_tool(data["tools"], tool_name)
+    if tool is None:
+        return _admin_mcp_local_error(
+            args,
+            f"Tool not found: {tool_name}. Run 'darkmage admin mcp list' to "
+            "see the tools the server currently offers.",
+            code="tool_not_found",
+        )
+    current, approved = _admin_mcp_hashes(tool)
+    if current is None or not _ADMIN_MCP_HASH_RE.fullmatch(current):
+        return _admin_mcp_local_error(
+            args,
+            "Unexpected response from the MCP tools API: the current schema "
+            "hash is missing or malformed",
+            code="invalid_response",
+        )
+
+    if provided is not None and provided != current:
+        return _admin_mcp_local_error(
+            args,
+            f"Refusing to approve {tool_name}: the provided hash does not "
+            f"match the current schema. provided={provided} current={current} "
+            f"approved={approved or 'none'}. Reload with 'darkmage admin mcp "
+            "list' and approve the current hash.",
+            code="schema_hash_mismatch",
+        )
+
+    if provided is None and not getattr(args, "yes", False):
+        message = (
+            f"Approval of {tool_name} requires --yes. Current schema hash: "
+            f"{current}."
+        )
+        if approved and approved != current:
+            message += (
+                f" Approved schema hash: {approved} (the schema changed; "
+                "approving will replace it)."
+            )
+        return _admin_mcp_local_error(
+            args, message, code="confirmation_required"
+        )
+
+    schema_hash = provided or current
+    approved_tool, error = _admin_mcp_request(
+        args,
+        lambda: client.admin_mcp_approve(tool_name, schema_hash),
+        not_found=f"MCP tool {tool_name}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(approved_tool, dict):
+        return _admin_mcp_local_error(
+            args,
+            "Unexpected response from the MCP approval API",
+            code="invalid_response",
+        )
+    server = data.get("server") or "-"
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(
+            {
+                "schema_version": 1,
+                "server": server,
+                "approved": True,
+                "tool": approved_tool,
+            }
+        )
+        return 0
+
+    width = min(80, _terminal_width())
+    new_current, new_approved = _admin_mcp_hashes(approved_tool)
+    print(f"Approved MCP tool: {approved_tool.get('name') or tool_name}")
+    _print_wrapped_field("Server", server, width=width)
+    _print_wrapped_field("Schema hash", new_current or schema_hash, width=width)
+    _print_wrapped_field("Approved hash", new_approved or "-", width=width)
+    _print_wrapped_field(
+        "Approval", _admin_mcp_status(approved_tool), width=width
+    )
+    return 0
+
+
+def cmd_admin_mcp_call(args: argparse.Namespace, client: DarkmageClient) -> int:
+    tool_name, error = _admin_mcp_tool_arg(args)
+    if error is not None:
+        return error
+    assert tool_name is not None
+
+    raw_arguments = getattr(args, "arguments_json", None)
+    if raw_arguments is None:
+        return _admin_mcp_local_error(
+            args, "Missing --args: pass a JSON object", code="invalid_arguments"
+        )
+    try:
+        arguments = json.loads(raw_arguments)
+    except (TypeError, ValueError) as exc:
+        return _admin_mcp_local_error(
+            args,
+            f"Invalid --args JSON: {exc}",
+            code="invalid_arguments",
+        )
+    if not isinstance(arguments, dict):
+        return _admin_mcp_local_error(
+            args,
+            "Invalid --args: expected a JSON object",
+            code="invalid_arguments",
+        )
+
+    data, error = _admin_mcp_request(
+        args,
+        lambda: client.admin_mcp_call(tool_name, arguments),
+        not_found=f"MCP tool {tool_name}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(data, dict):
+        return _admin_mcp_local_error(
+            args,
+            "Unexpected response from the MCP call API",
+            code="invalid_response",
+        )
+    ok = bool(data.get("ok"))
+    server = data.get("server") or "-"
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(
+            {
+                "schema_version": 1,
+                "server": server,
+                "tool": data.get("tool") or tool_name,
+                "ok": ok,
+                "result": data.get("result"),
+                "error": data.get("error"),
+                "truncated": bool(data.get("truncated", False)),
+            }
+        )
+        return 0 if ok else 1
+
+    width = min(80, _terminal_width())
+    print(f"MCP tool: {data.get('tool') or tool_name}")
+    _print_wrapped_field("Server", server, width=width)
+    _print_wrapped_field("OK", _admin_mcp_yes_no(ok), width=width)
+    _print_wrapped_field(
+        "Truncated", _admin_mcp_yes_no(bool(data.get("truncated", False))), width=width
+    )
+    if ok:
+        print("Result:")
+        _print_bounded_result(
+            data.get("result") if data.get("result") is not None else "-",
+            width=width,
+            limit=_ADMIN_MCP_RESULT_LIMIT,
+        )
+    else:
+        _print_wrapped_field("Error", data.get("error") or "unknown error", width=width)
+    return 0 if ok else 1
+
+
 async def _relay_terminal(
     ws: Any,
     read_stdin: Callable[[], Awaitable[bytes]],
@@ -3638,10 +4151,17 @@ _darkmage_complete() {
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
             ;;
         admin)
-            COMPREPLY=( $(compgen -W 'status skills --json' -- "$cur") )
+            COMPREPLY=( $(compgen -W 'status skills mcp --json' -- "$cur") )
             ;;
         skills)
             COMPREPLY=( $(compgen -W 'list show gate scan approve reject --json --status --name --version --source --report --digest --note --allow-high-risk' -- "$cur") )
+            ;;
+        mcp)
+            if [[ "${words[1]}" == "admin" ]]; then
+                COMPREPLY=( $(compgen -W 'list show approve call --json --hash --yes --args' -- "$cur") )
+            else
+                COMPREPLY=( $(compgen -W 'list call --json' -- "$cur") )
+            fi
             ;;
         --status)
             COMPREPLY=( $(compgen -W 'approved review blocked rejected' -- "$cur") )
@@ -3657,9 +4177,6 @@ _darkmage_complete() {
             ;;
         git)
             COMPREPLY=( $(compgen -W 'clone commit push pr --json' -- "$cur") )
-            ;;
-        mcp)
-            COMPREPLY=( $(compgen -W 'list call --json' -- "$cur") )
             ;;
         config)
             COMPREPLY=( $(compgen -W 'show set export import --json --url --runner-url --token --runner-token' -- "$cur") )
@@ -3764,16 +4281,24 @@ _darkmage() {
                         '--session-id[Only this session]:session id:'
                     ;;
                 admin)
-                    _arguments '1:subcommand:(status skills)' \
-                        '2:subcommand:(list show gate scan approve reject)' \
-                        '--status[Filter by status]:status:(approved review blocked rejected)' \
-                        '--name[Skill name]:name:' \
-                        '--version[Skill version]:version:' \
-                        '--source[Source URL]:source:' \
-                        '--report[Scanner report JSON]:file:_files' \
-                        '--digest[Bundle digest]:digest:' \
-                        '--note[Reviewer note]:note:' \
-                        '--allow-high-risk[Override a blocked scan]'
+                    if [[ $words[3] == mcp ]]; then
+                        _arguments '1:subcommand:(list show approve call)' \
+                            '--json[Output JSON]' \
+                            '--hash[Current schema hash]:hash:' \
+                            '--yes[Confirm approval when --hash is omitted]' \
+                            '--args[Tool arguments as JSON]:json:'
+                    else
+                        _arguments '1:subcommand:(status skills mcp)' \
+                            '2:subcommand:(list show gate scan approve reject)' \
+                            '--status[Filter by status]:status:(approved review blocked rejected)' \
+                            '--name[Skill name]:name:' \
+                            '--version[Skill version]:version:' \
+                            '--source[Source URL]:source:' \
+                            '--report[Scanner report JSON]:file:_files' \
+                            '--digest[Bundle digest]:digest:' \
+                            '--note[Reviewer note]:note:' \
+                            '--allow-high-risk[Override a blocked scan]'
+                    fi
                     ;;
                 complete|completion)
                     _values 'shell' bash zsh fish
@@ -3847,6 +4372,7 @@ complete -c darkmage -l limit -x -d 'Maximum approvals' -n '__fish_seen_subcomma
 
 # admin / skills options: --status --name --version --source --report --digest
 # --note --allow-high-risk
+# admin mcp options: --hash --yes --args
 complete -c darkmage -l status -x -a 'approved review blocked rejected' -d 'Skill scan status' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l name -r -d 'Skill name' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l version -r -d 'Skill version' -n '__fish_seen_subcommand_from skills'
@@ -3855,6 +4381,9 @@ complete -c darkmage -l report -r -d 'Scanner report JSON' -n '__fish_seen_subco
 complete -c darkmage -l digest -r -d 'Bundle digest' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l note -r -d 'Reviewer note' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l allow-high-risk -d 'Override a blocked scan' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l hash -r -d 'Current MCP schema hash' -n '__fish_seen_subcommand_from mcp'
+complete -c darkmage -l yes -d 'Confirm MCP approval when --hash is omitted' -n '__fish_seen_subcommand_from mcp'
+complete -c darkmage -l args -r -d 'MCP tool arguments as JSON' -n '__fish_seen_subcommand_from mcp'
 complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
 
 # Subcommand completions
@@ -3865,8 +4394,9 @@ complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' 
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c darkmage -f -a 'create get message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
-complete -c darkmage -f -a 'status skills' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
+complete -c darkmage -f -a 'status skills mcp' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
 complete -c darkmage -f -a 'list show gate scan approve reject' -d 'skills subcommands' -n '__fish_seen_subcommand skills'
+complete -c darkmage -f -a 'list show approve call' -d 'admin mcp subcommands' -n '__fish_seen_subcommand_from admin; and __fish_seen_subcommand_from mcp'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
 complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
@@ -4498,6 +5028,55 @@ def build_parser() -> argparse.ArgumentParser:
     p.add_argument("scan_id", help="Skill scan id")
     p.add_argument("--note", default="", help="Reviewer note (max 2000 chars)")
     p.set_defaults(func=cmd_admin_skills_reject)
+
+    mcp_admin = admin_sub.add_parser(
+        "mcp",
+        help="Remote MCP tool list and schema approval (admin only)",
+    )
+    mcp_admin_sub = mcp_admin.add_subparsers(dest="mcp_admin_command", required=True)
+
+    p = mcp_admin_sub.add_parser(
+        "list", help="List MCP tools and their approval state"
+    )
+    p.set_defaults(func=cmd_admin_mcp_list)
+
+    p = mcp_admin_sub.add_parser(
+        "show", help="Show one tool's schema and approval metadata"
+    )
+    p.add_argument("tool", help="MCP tool name")
+    p.set_defaults(func=cmd_admin_mcp_show)
+
+    p = mcp_admin_sub.add_parser(
+        "approve", help="Approve the current schema hash of one tool"
+    )
+    p.add_argument("tool", help="MCP tool name")
+    p.add_argument(
+        "--hash",
+        default=None,
+        help=(
+            "Current schema hash (64 lowercase hex). Omit to use the hash "
+            "fetched now; --yes is then required."
+        ),
+    )
+    p.add_argument(
+        "--yes",
+        action="store_true",
+        default=False,
+        help="Confirm when --hash is omitted",
+    )
+    p.set_defaults(func=cmd_admin_mcp_approve)
+
+    p = mcp_admin_sub.add_parser(
+        "call", help="Call an allowlisted read-only MCP tool"
+    )
+    p.add_argument("tool", help="MCP tool name")
+    p.add_argument(
+        "--args",
+        dest="arguments_json",
+        required=True,
+        help="Tool arguments as a JSON object",
+    )
+    p.set_defaults(func=cmd_admin_mcp_call)
 
     # exec (-p is normalized to this command in main)
     p = sub.add_parser("exec", help="One-shot: создать run, дождаться ответа")

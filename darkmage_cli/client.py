@@ -7,6 +7,7 @@ import time
 from collections.abc import Iterator
 from pathlib import Path
 from typing import Any
+from urllib.parse import quote
 
 import httpx
 
@@ -922,6 +923,33 @@ class DarkmageClient:
             "POST",
             f"/admin/skills/{scan_id}/reject",
             json={"note": note},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    # --- admin: MCP gateway ---
+    def admin_mcp_tools(self) -> dict:
+        """List the MCP server's tools with their current approval state."""
+        resp = self._request("GET", "/admin/mcp/tools")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_mcp_approve(self, tool: str, schema_hash: str) -> dict:
+        """Approve the exact schema hash currently served for *tool*."""
+        resp = self._request(
+            "POST",
+            f"/admin/mcp/tools/{quote(tool, safe='')}/approve",
+            json={"schema_hash": schema_hash},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_mcp_call(self, tool: str, arguments: dict[str, Any]) -> dict:
+        """Call one allowlisted, schema-pinned read-only MCP tool."""
+        resp = self._request(
+            "POST",
+            "/admin/mcp/call",
+            json={"tool": tool, "arguments": arguments},
         )
         self._raise_for_status(resp)
         return self._json_or_text(resp)
