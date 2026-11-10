@@ -852,6 +852,80 @@ class DarkmageClient:
         self._raise_for_status(resp)
         return self._json_or_text(resp)
 
+    # --- admin: pre-install skill gate ---
+    def admin_skill_list(
+        self,
+        status: str | None = None,
+        limit: int = 50,
+    ) -> list:
+        """Recent skill scans, newest first, optionally filtered by status."""
+        params: dict[str, object] = {"limit": limit}
+        if status:
+            params["status"] = status
+        resp = self._request("GET", "/admin/skills", params=params)
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_skill_get(self, scan_id: str) -> dict:
+        """One skill scan with its stored scanner report."""
+        resp = self._request("GET", f"/admin/skills/{scan_id}")
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_skill_gate(self, digest: str) -> dict:
+        """Gate decision for a bundle digest (``allowed`` only when approved)."""
+        resp = self._request("GET", "/admin/skills/gate", params={"digest": digest})
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_skill_scan(
+        self,
+        name: str,
+        version: str,
+        source: str,
+        digest: str,
+        report: dict,
+    ) -> dict:
+        """Submit a normalized scanner report; the API only classifies it."""
+        resp = self._request(
+            "POST",
+            "/admin/skills/scan",
+            json={
+                "name": name,
+                "version": version,
+                "source": source,
+                "digest": digest,
+                "report": report,
+            },
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_skill_approve(
+        self,
+        scan_id: str,
+        note: str = "",
+        allow_high_risk: bool = False,
+    ) -> dict:
+        """Approve a scan; blocked scans need ``allow_high_risk``."""
+        resp = self._request(
+            "POST",
+            f"/admin/skills/{scan_id}/approve",
+            json={"note": note, "allow_high_risk": allow_high_risk},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
+    def admin_skill_reject(self, scan_id: str, note: str = "") -> dict:
+        """Reject a scan and store the reviewer note."""
+        resp = self._request(
+            "POST",
+            f"/admin/skills/{scan_id}/reject",
+            json={"note": note},
+        )
+        self._raise_for_status(resp)
+        return self._json_or_text(resp)
+
     # --- git (Phase 3, requires backend GitHub App integration) ---
     def git_clone(self, workspace_id: str, url: str, ref: str | None = None, depth: int = 1) -> dict:
         body: dict[str, Any] = {"url": url, "depth": depth}

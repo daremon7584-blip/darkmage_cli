@@ -2,6 +2,7 @@ from __future__ import annotations
 
 import argparse
 import getpass
+import hashlib
 import io
 import json
 import os
@@ -2150,6 +2151,477 @@ def cmd_admin_status(args: argparse.Namespace, client: DarkmageClient) -> None:
             print(f"  Порог низкого баланса: ${low_threshold} USD")
 
 
+# ---------------------------------------------------------------------------
+# Admin skill gate (/admin/skills)
+# ---------------------------------------------------------------------------
+
+_ADMIN_SKILL_DIGEST_RE = re.compile(r"^[a-f0-9]{64}$")
+_ADMIN_SKILL_STATUSES = ("approved", "review", "blocked", "rejected")
+_ADMIN_SKILL_FINDING_LIMIT = 5
+
+
+def _admin_skills_local_error(
+    args: argparse.Namespace,
+    message: str,
+    *,
+    code: str = "invalid_request",
+    status_code: int | None = None,
+) -> int:
+    """Report a validation error before any API call, with exit code 2."""
+    if getattr(args, "json", False):
+        print_json(
+            {
+                "schema_version": 1,
+                "error": {
+                    "code": code,
+                    "message": message,
+                    "status_code": status_code,
+                    "retryable": False,
+                },
+            }
+        )
+    else:
+        print(f"Error: {message}", file=sys.stderr)
+    return 2
+
+
+def _admin_skills_request(
+    args: argparse.Namespace,
+    call: Callable[[], Any],
+    *,
+    not_found: str,
+) -> tuple[Any, int | None]:
+    """Run one admin call and turn a 404 into an admin-only/not-found error.
+
+    ``require_admin`` answers non-admins with 404, so a raw "404 Not Found"
+    would be misleading. The message never includes request headers or tokens.
+    """
+    try:
+        return call(), None
+    except DarkmageError as exc:
+        if exc.status_code == 404:
+            return None, _admin_skills_local_error(
+                args,
+                f"Admin only or not found: {not_found}",
+                code="admin_only_or_not_found",
+                status_code=404,
+            )
+        raise
+
+
+def _skill_report_digests(data: Any, depth: int = 0) -> list[str]:
+    """Collect digest-looking fields from scanner report metadata."""
+    if not isinstance(data, dict) or depth > 2:
+        return []
+    found: list[str] = []
+    for key in ("digest", "bundle_digest"):
+        value = data.get(key)
+        if isinstance(value, str) and value.strip():
+            found.append(value.strip())
+    for key in ("metadata", "skill", "bundle", "report"):
+        nested = data.get(key)
+        if isinstance(nested, dict):
+            found.extend(_skill_report_digests(nested, depth + 1))
+    return found
+
+
+def _skill_report_source(data: Any) -> Path | None:
+    """Return an existing local ``skill.source`` path from a scanner report."""
+    if not isinstance(data, dict):
+        return None
+    candidates = [data]
+    nested = data.get("report")
+    if isinstance(nested, dict):
+        candidates.append(nested)
+    for candidate in candidates:
+        skill = candidate.get("skill")
+        if not isinstance(skill, dict):
+            continue
+        source = skill.get("source")
+        if not isinstance(source, str) or not source:
+            continue
+        try:
+            path = Path(source).expanduser()
+            if path.exists() and not path.is_symlink():
+                return path
+        except OSError:  # pragma: no cover - unusual filesystem errors
+            continue
+    return None
+
+
+def _skill_bundle_digest(path: Path) -> str:
+    """Hash a skill file or directory like the backend wrapper does.
+
+    Symlinks are skipped so a report cannot make the CLI read arbitrary files.
+    """
+    digest = hashlib.sha256()
+    if path.is_file():
+        digest.update(path.read_bytes())
+        return digest.hexdigest()
+    for item in sorted(path.rglob("*")):
+        if item.is_symlink() or not item.is_file():
+            continue
+        relative = item.relative_to(path).as_posix()
+        if relative.startswith((".git/", "__pycache__/")) or "/__pycache__/" in relative:
+            continue
+        digest.update(relative.encode("utf-8"))
+        digest.update(b"\0")
+        digest.update(item.read_bytes())
+        digest.update(b"\0")
+    return digest.hexdigest()
+
+
+def _read_skill_report(path: str) -> tuple[dict[str, Any] | None, bytes | None, str | None]:
+    """Read a scanner report from a file or stdin (``-``)."""
+    try:
+        if path == "-":
+            text = sys.stdin.read()
+            raw = text.encode("utf-8")
+        else:
+            raw = Path(path).read_bytes()
+            text = raw.decode("utf-8")
+    except (OSError, UnicodeDecodeError) as exc:
+        return None, None, f"Cannot read report {path}: {exc}"
+    try:
+        data = json.loads(text)
+    except ValueError as exc:
+        return None, None, f"Report {path} is not valid JSON: {exc}"
+    if not isinstance(data, dict):
+        return None, None, "Report must be a JSON object"
+    return data, raw, None
+
+
+def _skill_issue_location(issue: dict[str, Any]) -> str:
+    location = issue.get("location")
+    if not isinstance(location, dict):
+        return ""
+    file_name = location.get("file") or location.get("path")
+    line = location.get("start_line") or location.get("line")
+    if not file_name:
+        return ""
+    return f"{file_name}:{line}" if line else str(file_name)
+
+
+def _print_skill_findings(report: Any, *, width: int) -> None:
+    issues = report.get("issues") if isinstance(report, dict) else None
+    if not isinstance(issues, list) or not issues:
+        print("Findings:   none reported")
+        return
+    shown = min(_ADMIN_SKILL_FINDING_LIMIT, len(issues))
+    print(f"Findings:   {len(issues)} (top {shown})")
+    for issue in issues[:_ADMIN_SKILL_FINDING_LIMIT]:
+        if not isinstance(issue, dict):
+            continue
+        severity = str(issue.get("severity") or "?").upper()
+        category = str(issue.get("category") or "Unknown")
+        confidence = issue.get("confidence")
+        conf = f" {confidence:.2f}" if isinstance(confidence, (int, float)) else ""
+        finding = str(issue.get("finding") or issue.get("pattern") or "").strip()
+        location = _skill_issue_location(issue)
+        prefix = f"  - [{severity}] {category}{conf}: "
+        suffix = f" @ {location}" if location else ""
+        if suffix and len(prefix) + len(suffix) < width:
+            finding_width = max(1, width - len(prefix) - len(suffix))
+            line = prefix + _truncate_cell(finding, finding_width) + suffix
+        else:
+            line = prefix + finding
+        print(_truncate_cell(line, width))
+    remaining = len(issues) - shown
+    if remaining > 0:
+        print(_truncate_cell(f"  ... {remaining} more; use --json for the full report", width))
+
+
+def _print_skill_command(prefix: str, arguments: list[str], *, width: int) -> None:
+    """Print a copy-pasteable command, wrapping with shell line continuations."""
+    line = f"  {prefix}"
+    for argument in arguments:
+        candidate = f"{line} {argument}"
+        if len(candidate) <= width:
+            line = candidate
+        else:
+            print(line + " \\")
+            line = f"    {argument}"
+    print(line)
+
+
+def _skill_review_hints(scan: dict[str, Any], *, width: int) -> None:
+    scan_id = str(scan.get("id") or "")
+    blocked = scan.get("status") == "blocked"
+    print()
+    print("Review:")
+    approve_args = []
+    if blocked:
+        approve_args.append("--allow-high-risk")
+    approve_args.extend(["--note", '"reviewed"'])
+    _print_skill_command(
+        f"darkmage admin skills approve {scan_id}",
+        approve_args,
+        width=width,
+    )
+    _print_skill_command(
+        f"darkmage admin skills reject {scan_id}",
+        ["--note", '"reason"'],
+        width=width,
+    )
+
+
+def cmd_admin_skills_list(args: argparse.Namespace, client: DarkmageClient) -> int:
+    scans, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_list(getattr(args, "status", None)),
+        not_found="the skill scan list endpoint",
+    )
+    if error is not None:
+        return error
+    if not isinstance(scans, list):
+        return _admin_skills_local_error(args, "Unexpected response from the skill scan API")
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(scans)
+        return 0
+    if not scans:
+        print("No skill scans.")
+        return 0
+    print("Skill scans:")
+    _print_table(
+        ["ID", "NAME", "STATUS", "SEVERITY", "RISK", "DIGEST", "CREATED"],
+        [
+            [
+                scan.get("id", ""),
+                scan.get("name", ""),
+                scan.get("status", ""),
+                scan.get("severity") or "-",
+                scan.get("risk_score") if scan.get("risk_score") is not None else "-",
+                str(scan.get("digest") or "")[:12],
+                _short_requested_at(scan.get("created_at")),
+            ]
+            for scan in scans
+            if isinstance(scan, dict)
+        ],
+        min_widths=[36, 8, 7, 8, 4, 8, 16],
+        drop_order=[6, 4, 3],
+        compact_below=100,
+    )
+    return 0
+
+
+def cmd_admin_skills_show(args: argparse.Namespace, client: DarkmageClient) -> int:
+    scan, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_get(args.scan_id),
+        not_found=f"skill scan {args.scan_id}",
+    )
+    if error is not None:
+        return error
+    if not isinstance(scan, dict):
+        return _admin_skills_local_error(args, "Unexpected response from the skill scan API")
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(scan)
+        return 0
+
+    width = _terminal_width()
+    scan_id = scan.get("id") or args.scan_id
+    print(f"Skill scan: {scan_id}")
+    _print_wrapped_field("Name", scan.get("name"), width=width)
+    _print_wrapped_field("Version", scan.get("version") or "-", width=width)
+    _print_wrapped_field("Source", scan.get("source") or "-", width=width)
+    _print_wrapped_field("Digest", scan.get("digest"), width=width)
+    _print_wrapped_field("Status", scan.get("status"), width=width)
+    _print_wrapped_field(
+        "Risk",
+        scan.get("risk_score") if scan.get("risk_score") is not None else "-",
+        width=width,
+    )
+    _print_wrapped_field("Severity", scan.get("severity") or "-", width=width)
+    _print_wrapped_field(
+        "Recommendation", scan.get("recommendation") or "-", width=width
+    )
+    _print_wrapped_field("Review note", scan.get("review_note") or "-", width=width)
+    _print_wrapped_field("Created", scan.get("created_at"), width=width)
+    if scan.get("reviewed_at"):
+        _print_wrapped_field("Reviewed", scan.get("reviewed_at"), width=width)
+    _print_skill_findings(scan.get("report"), width=width)
+    _skill_review_hints(scan, width=width)
+    return 0
+
+
+def cmd_admin_skills_gate(args: argparse.Namespace, client: DarkmageClient) -> int:
+    digest = str(args.digest or "")
+    if not _ADMIN_SKILL_DIGEST_RE.fullmatch(digest):
+        return _admin_skills_local_error(
+            args,
+            f"Invalid digest {digest!r}: expected 64 lowercase hex characters",
+            code="invalid_digest",
+        )
+    decision, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_gate(digest),
+        not_found=f"digest {digest} has not been scanned",
+    )
+    if error is not None:
+        return error
+    if not isinstance(decision, dict):
+        return _admin_skills_local_error(args, "Unexpected response from the skill gate API")
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(decision)
+        return 0
+    print(f"Digest: {decision.get('digest') or digest}")
+    print(f"Status: {decision.get('status') or 'unknown'}")
+    print(f"Allowed: {'yes' if decision.get('allowed') else 'no'}")
+    return 0
+
+
+def cmd_admin_skills_scan(args: argparse.Namespace, client: DarkmageClient) -> int:
+    report_data, raw, error = _read_skill_report(args.report)
+    if error is not None:
+        return _admin_skills_local_error(args, error, code="invalid_report")
+    assert report_data is not None and raw is not None
+
+    digest = getattr(args, "digest", None)
+    if digest:
+        digest = str(digest).strip()
+        if not _ADMIN_SKILL_DIGEST_RE.fullmatch(digest):
+            return _admin_skills_local_error(
+                args,
+                f"Invalid digest {digest!r}: expected 64 lowercase hex characters",
+                code="invalid_digest",
+            )
+    else:
+        candidates = _skill_report_digests(report_data)
+        valid = next(
+            (value.lower() for value in candidates if _ADMIN_SKILL_DIGEST_RE.fullmatch(value.lower())),
+            None,
+        )
+        if valid:
+            digest = valid
+        elif candidates:
+            return _admin_skills_local_error(
+                args,
+                "Report digest must be 64 lowercase hex characters",
+                code="invalid_digest",
+            )
+        else:
+            source_path = _skill_report_source(report_data)
+            if source_path is not None:
+                digest = _skill_bundle_digest(source_path)
+            else:
+                # No digest or local skill path in the report: fall back to a
+                # content digest so the command still produces an auditable
+                # idempotency key. Prefer --digest for the skill bundle hash.
+                digest = hashlib.sha256(raw).hexdigest()
+
+    name = str(getattr(args, "name", "") or "").strip()
+    if not name:
+        return _admin_skills_local_error(args, "Skill name must not be empty", code="invalid_name")
+    version = str(getattr(args, "version", "") or "")
+    source = str(getattr(args, "source", "") or "")
+    nested_report = report_data.get("report")
+    payload_report = nested_report if isinstance(nested_report, dict) else report_data
+
+    scan, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_scan(name, version, source, digest, payload_report),
+        not_found="the skill scan endpoint",
+    )
+    if error is not None:
+        return error
+    if not isinstance(scan, dict):
+        return _admin_skills_local_error(args, "Unexpected response from the skill scan API")
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(scan)
+        return 0
+
+    width = _terminal_width()
+    scan_id = scan.get("id") or ""
+    print(f"Skill scan: {scan_id}")
+    _print_wrapped_field("Status", scan.get("status"), width=width)
+    _print_wrapped_field(
+        "Risk",
+        scan.get("risk_score") if scan.get("risk_score") is not None else "-",
+        width=width,
+    )
+    _print_wrapped_field("Severity", scan.get("severity") or "-", width=width)
+    _print_wrapped_field("Digest", scan.get("digest") or digest, width=width)
+    print("Next:")
+    _print_skill_command(
+        f"darkmage admin skills show {scan_id}",
+        [],
+        width=width,
+    )
+    if scan.get("status") == "blocked":
+        _print_skill_command(
+            f"darkmage admin skills approve {scan_id}",
+            ["--allow-high-risk"],
+            width=width,
+        )
+    return 0
+
+
+def cmd_admin_skills_approve(args: argparse.Namespace, client: DarkmageClient) -> int:
+    allow_high_risk = bool(getattr(args, "allow_high_risk", False))
+    if not allow_high_risk:
+        # require_admin answers non-admins with 404, and a blocked scan must be
+        # overridden explicitly before the approve POST is sent.
+        scan, error = _admin_skills_request(
+            args,
+            lambda: client.admin_skill_get(args.scan_id),
+            not_found=f"skill scan {args.scan_id}",
+        )
+        if error is not None:
+            return error
+        if not isinstance(scan, dict):
+            return _admin_skills_local_error(
+                args, "Unexpected response from the skill scan API"
+            )
+        if scan.get("status") == "blocked":
+            return _admin_skills_local_error(
+                args,
+                "Skill scan is blocked by high-confidence findings; "
+                "rerun with --allow-high-risk to approve",
+                code="high_risk_requires_override",
+            )
+
+    data, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_approve(
+            args.scan_id,
+            getattr(args, "note", "") or "",
+            allow_high_risk,
+        ),
+        not_found=f"skill scan {args.scan_id}",
+    )
+    if error is not None:
+        return error
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+    print(f"Approved skill scan: {data.get('id') or args.scan_id}")
+    _print_wrapped_field("Status", data.get("status"), width=_terminal_width())
+    if data.get("review_note"):
+        _print_wrapped_field("Note", data.get("review_note"), width=_terminal_width())
+    return 0
+
+
+def cmd_admin_skills_reject(args: argparse.Namespace, client: DarkmageClient) -> int:
+    data, error = _admin_skills_request(
+        args,
+        lambda: client.admin_skill_reject(
+            args.scan_id,
+            getattr(args, "note", "") or "",
+        ),
+        not_found=f"skill scan {args.scan_id}",
+    )
+    if error is not None:
+        return error
+    if getattr(args, "json", False) or not sys.stdout.isatty():
+        print_json(data)
+        return 0
+    print(f"Rejected skill scan: {data.get('id') or args.scan_id}")
+    _print_wrapped_field("Status", data.get("status"), width=_terminal_width())
+    if data.get("review_note"):
+        _print_wrapped_field("Note", data.get("review_note"), width=_terminal_width())
+    return 0
+
+
 async def _relay_terminal(
     ws: Any,
     read_stdin: Callable[[], Awaitable[bytes]],
@@ -3165,6 +3637,18 @@ _darkmage_complete() {
         approvals)
             COMPREPLY=( $(compgen -W 'list show approve reject --json --scope --limit --run-id --session-id' -- "$cur") )
             ;;
+        admin)
+            COMPREPLY=( $(compgen -W 'status skills --json' -- "$cur") )
+            ;;
+        skills)
+            COMPREPLY=( $(compgen -W 'list show gate scan approve reject --json --status --name --version --source --report --digest --note --allow-high-risk' -- "$cur") )
+            ;;
+        --status)
+            COMPREPLY=( $(compgen -W 'approved review blocked rejected' -- "$cur") )
+            ;;
+        --report)
+            COMPREPLY=( $(compgen -f -- "$cur") )
+            ;;
         process)
             COMPREPLY=( $(compgen -W 'start output stop --json' -- "$cur") )
             ;;
@@ -3279,6 +3763,18 @@ _darkmage() {
                         '--run-id[Only this run]:run id:' \
                         '--session-id[Only this session]:session id:'
                     ;;
+                admin)
+                    _arguments '1:subcommand:(status skills)' \
+                        '2:subcommand:(list show gate scan approve reject)' \
+                        '--status[Filter by status]:status:(approved review blocked rejected)' \
+                        '--name[Skill name]:name:' \
+                        '--version[Skill version]:version:' \
+                        '--source[Source URL]:source:' \
+                        '--report[Scanner report JSON]:file:_files' \
+                        '--digest[Bundle digest]:digest:' \
+                        '--note[Reviewer note]:note:' \
+                        '--allow-high-risk[Override a blocked scan]'
+                    ;;
                 complete|completion)
                     _values 'shell' bash zsh fish
                     ;;
@@ -3348,6 +3844,17 @@ complete -c darkmage -l no-color -d 'Disable diff colors' -n '__fish_seen_subcom
 complete -c darkmage -l force -d 'Overwrite an existing output file' -n '__fish_seen_subcommand_from patch'
 complete -c darkmage -l scope -x -a 'call turn' -d 'Approval scope' -n '__fish_seen_subcommand_from approvals'
 complete -c darkmage -l limit -x -d 'Maximum approvals' -n '__fish_seen_subcommand_from approvals'
+
+# admin / skills options: --status --name --version --source --report --digest
+# --note --allow-high-risk
+complete -c darkmage -l status -x -a 'approved review blocked rejected' -d 'Skill scan status' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l name -r -d 'Skill name' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l version -r -d 'Skill version' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l source -r -d 'Source URL' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l report -r -d 'Scanner report JSON' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l digest -r -d 'Bundle digest' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l note -r -d 'Reviewer note' -n '__fish_seen_subcommand_from skills'
+complete -c darkmage -l allow-high-risk -d 'Override a blocked scan' -n '__fish_seen_subcommand_from skills'
 complete -c darkmage -l yes -s y -d 'Skip confirmation' -n '__fish_seen_subcommand_from delete rm'
 
 # Subcommand completions
@@ -3358,6 +3865,8 @@ complete -c darkmage -f -a 'pull push diff watch resolve' -d 'sync subcommands' 
 complete -c darkmage -f -a 'create list new all runs files read' -d 'session subcommands' -n '__fish_seen_subcommand session'
 complete -c darkmage -f -a 'create get message answer context revert review patch stop list events' -d 'run subcommands' -n '__fish_seen_subcommand run'
 complete -c darkmage -f -a 'list show approve reject' -d 'approvals subcommands' -n '__fish_seen_subcommand approvals'
+complete -c darkmage -f -a 'status skills' -d 'admin subcommands' -n '__fish_seen_subcommand admin'
+complete -c darkmage -f -a 'list show gate scan approve reject' -d 'skills subcommands' -n '__fish_seen_subcommand skills'
 complete -c darkmage -f -a 'start output stop' -d 'process subcommands' -n '__fish_seen_subcommand process'
 complete -c darkmage -f -a 'create list' -d 'payment subcommands' -n '__fish_seen_subcommand payment'
 complete -c darkmage -f -a 'clone commit push pr' -d 'git subcommands' -n '__fish_seen_subcommand git'
@@ -3930,6 +4439,65 @@ def build_parser() -> argparse.ArgumentParser:
 
     p = admin_sub.add_parser("status", help="Статус сервера и баланс OpenRouter")
     p.set_defaults(func=cmd_admin_status)
+
+    skills = admin_sub.add_parser(
+        "skills",
+        help="Pre-install gate for agent skills (admin only)",
+    )
+    skills_sub = skills.add_subparsers(dest="skills_command", required=True)
+
+    p = skills_sub.add_parser("list", help="List recent skill scans")
+    p.add_argument(
+        "--status",
+        choices=list(_ADMIN_SKILL_STATUSES),
+        default=None,
+        help="Only scans with this status",
+    )
+    p.set_defaults(func=cmd_admin_skills_list)
+
+    p = skills_sub.add_parser("show", help="Show one scan with bounded findings")
+    p.add_argument("scan_id", help="Skill scan id")
+    p.set_defaults(func=cmd_admin_skills_show)
+
+    p = skills_sub.add_parser("gate", help="Check whether a bundle digest is allowed")
+    p.add_argument("digest", help="64 lowercase hex bundle digest")
+    p.set_defaults(func=cmd_admin_skills_gate)
+
+    p = skills_sub.add_parser("scan", help="Submit a scanner report to the gate")
+    p.add_argument("--name", required=True, help="Skill name (1-160 chars)")
+    p.add_argument("--version", default="", help="Skill version")
+    p.add_argument("--source", default="", help="Source URL or repository")
+    p.add_argument(
+        "--report",
+        required=True,
+        help="Scanner report JSON file ('-' reads stdin)",
+    )
+    p.add_argument(
+        "--digest",
+        default=None,
+        help=(
+            "Bundle digest (64 lowercase hex); default: digest from the report, "
+            "a local skill.source path, or the report content"
+        ),
+    )
+    p.set_defaults(func=cmd_admin_skills_scan)
+
+    p = skills_sub.add_parser("approve", help="Approve a scan")
+    p.add_argument("scan_id", help="Skill scan id")
+    p.add_argument("--note", default="", help="Reviewer note (max 2000 chars)")
+    p.add_argument(
+        "--allow-high-risk",
+        dest="allow_high_risk",
+        action="store_true",
+        default=False,
+        help="Override a blocked/high-confidence scan",
+    )
+    p.set_defaults(func=cmd_admin_skills_approve)
+
+    p = skills_sub.add_parser("reject", help="Reject a scan")
+    p.add_argument("scan_id", help="Skill scan id")
+    p.add_argument("--note", default="", help="Reviewer note (max 2000 chars)")
+    p.set_defaults(func=cmd_admin_skills_reject)
 
     # exec (-p is normalized to this command in main)
     p = sub.add_parser("exec", help="One-shot: создать run, дождаться ответа")
