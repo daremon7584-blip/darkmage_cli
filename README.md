@@ -109,6 +109,12 @@ darkmage payment create [--product standard_30d|credits] [--amount-rub N]  # с�
 darkmage payment list                                                       # список своих платежей
 
 darkmage admin status                          # баланс OpenRouter (только админ)
+darkmage admin skills list [--status approved|review|blocked|rejected] [--json]
+darkmage admin skills show <scan_id> [--json]  # детали, top-5 findings, подсказки approve/reject
+darkmage admin skills gate <digest> [--json]   # allowed=true только для approved
+darkmage admin skills scan --name NAME [--version V] [--source URL] --report FILE [--json]
+darkmage admin skills approve <scan_id> [--note TEXT] [--allow-high-risk] [--json]
+darkmage admin skills reject <scan_id> [--note TEXT] [--json]
 darkmage term <workspace_id>                   # безопасный relay к удалённому PTY (без локального shell)
 
 darkmage git clone <ws> <url> [--ref main] [--depth 1]   # клон репозитория (Phase 3, бэкенд)
@@ -160,6 +166,27 @@ darkmage run patch <run_id> --json                  # run_id/files/additions/del
 ```
 
 The endpoint is subscription-gated (HTTP 402); a missing/foreign run is 404, an unfinished run or missing checkpoint is 409, and patches above the server's 16 MiB limit are 413. Errors print a clear message to stderr and exit non-zero without exposing the token.
+
+### Admin skill gate
+
+`darkmage admin skills` wraps the admin-only pre-install gate (`/admin/skills`). It never executes a skill; it only lists scans, shows a stored scanner report, checks a bundle digest, and records a reviewer decision.
+
+```bash
+darkmage admin skills list --status blocked
+darkmage admin skills show <scan_id>
+darkmage admin skills gate <64-hex-digest>
+darkmage admin skills scan --name release-helper --version 0.1.0 \
+  --source https://github.com/acme/skills/release-helper --report report.json
+darkmage admin skills approve <scan_id> --note "reviewed" --allow-high-risk
+darkmage admin skills reject <scan_id> --note "untrusted publisher"
+```
+
+- `scan` accepts a normalized scanner report (SkillSpector-compatible `risk_assessment` + `issues`) or a full payload with a nested `report`. The digest is taken from `--digest`, a top-level/nested `digest` field, a local `report.skill.source` path (hashed like the backend wrapper), or finally the report file contents. Prefer `--digest` when the skill bundle hash is known.
+- Approving a `blocked` scan requires `--allow-high-risk`. The CLI checks the scan first and refuses locally with exit 2, so no approve request is sent without the override.
+- `gate` validates that the digest is exactly 64 lowercase hex characters before calling the API and exits 2 otherwise.
+- The list table fits 80 columns; `show` prints at most five findings and full approve/reject hints, wrapping long commands with shell line continuations.
+- Admin-only access is enforced by the server. Non-admins get a 404, which the CLI renders as `Admin only or not found: ...` (never a traceback or token). API 409/422 errors are printed clearly with exit 2.
+- `--json` returns the raw API object(s): a list for `list`, a scan detail for `show`/`scan`/`approve`/`reject`, and a gate decision for `gate`.
 
 ## Notes
 

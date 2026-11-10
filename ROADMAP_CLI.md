@@ -68,7 +68,16 @@
 - `--json` — `run_id`, `files`, `additions`, `deletions`, `stat[]`, `patch`; пустой патч — пустые массивы
 - 402 (подписка), 404, 409 (не завершён/нет чекпоинта) и 413 (патч > 16 MiB) — понятные ошибки без токена; 28 тестов
 
-Все 208 тестов проходят.
+**Admin skills gate (10.11.2026):**
+- `admin skills list [--status ...] [--json]` — список сканов, таблица в 80 колонок (id/name/status/severity/risk/digest prefix/date)
+- `admin skills show <scan_id> [--json]` — детали, top-5 findings/issues и подсказки approve/reject
+- `admin skills gate <digest> [--json]` — 64 lowercase hex проверяется локально (exit 2), `allowed` только для approved
+- `admin skills scan --name NAME [--version V] [--source URL] --report FILE [--json]` — POST нормализованного отчёта сканера; digest берётся из `--digest`, отчёта, локального `skill.source` или содержимого файла
+- `admin skills approve <scan_id> [--note TEXT] [--allow-high-risk] [--json]`, `... reject ...` — blocked/high-risk скан требует `--allow-high-risk`; проверка до approve-запроса
+- 404 для не-админа рендерится как `Admin only or not found`, 409/422 — понятные ошибки без traceback и токена; bash/zsh/fish completion и help
+- 37 тестов; весь CLI suite — 246 тестов
+
+Все 246 тестов проходят.
 
 ---
 
@@ -261,6 +270,7 @@ darkmage run create|get|message|answer|context|revert|review|stop|events|list
 darkmage process start|output|stop
 darkmage payment create|list
 darkmage admin status
+darkmage admin skills list|show|gate|scan|approve|reject ...
 darkmage term <workspace_id>
 darkmage tui <workspace_id> [--run-id <id>]
 darkmage git clone|commit|push|pr <ws> ...
